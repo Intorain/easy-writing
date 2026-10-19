@@ -5,6 +5,7 @@ import os
 import signal
 import sys
 import time
+import httpx
 from typing import Annotated, Literal
 
 os.environ["LANGSMITH_TRACING"] = "false"
@@ -1493,7 +1494,10 @@ def make_model(config, role="planner"):
     gateway = config.get("gateway") or {}
     if not gateway.get("baseUrl") or not gateway.get("token"):
         raise ValueError("模型配置缺少网关地址或口令：worker 不直连供应商")
+    # 这里只连接桌面宿主的回环网关；Windows 系统代理也可能代理 127.0.0.1。
+    # 不让本机通信继承代理，供应商连接及其代理设置仍由 Rust 网关负责。
     return ChatOpenAI(model=str(config["id"]), api_key=gateway["token"], base_url=gateway["baseUrl"].rstrip("/"),
+                      http_client=httpx.Client(trust_env=False), http_async_client=httpx.AsyncClient(trust_env=False),
                       default_headers={"X-EW-Scene": SCENES.get(role, "agent"), "X-EW-Max-Attempts": "1"},
                       max_tokens=limits.output_tokens, metadata={**limits.metadata(), "ew_structured_output": config.get("structuredOutput", "tool")},
                       timeout=RUNTIME_LIMITS.request_timeout_seconds, max_retries=0, streaming=True, stream_usage=True, use_responses_api=False)
