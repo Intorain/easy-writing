@@ -1,4 +1,5 @@
 import type { WorkflowQualityIssue, WorkflowQualityNotice } from '@/types/workflow'
+import type { QualityReport } from '@/types/canon'
 import { scanSensitiveText } from '@/storage/local-sensitive-words'
 import { countWords } from '@/utils/word-count'
 
@@ -123,4 +124,31 @@ export const runLocalChapterQualityCheck = (params: {
     createdAt: new Date().toISOString(),
     critic: { status: 'unavailable', error: '开源版暂未接入 AI 评审，仅做规则检查' },
   }
+}
+
+/**
+ * 并入 Agent 质量门（写作台“本章体检”同一套）：状态疑点、钩子、AI 味、人物表等。
+ * 字数、整段重复、敏感词本地已按工作流目标字数查过，宿主的 structure.* 不重复计入。
+ * block 仍会停机等确认；suspect 与 notice 只作提示，不拦截生成。
+ */
+export const mergeAgentGate = (
+  notice: WorkflowQualityNotice,
+  report: Pick<QualityReport, 'issues'> | null | undefined
+): WorkflowQualityNotice => {
+  const extra: WorkflowQualityIssue[] = (report?.issues || [])
+    .filter(issue => !issue.code.startsWith('structure.'))
+    .map(issue => ({
+      source: issue.source,
+      code: issue.code,
+      dimension: issue.dimension,
+      message: issue.message,
+      severity: issue.level === 'notice' ? 'low' : 'high',
+      blocking: issue.level === 'block',
+      fix: issue.fix,
+      paragraphs: issue.paragraphs,
+      quotes: issue.quotes.slice(0, QUOTE_MAX).map(clipQuote),
+    }))
+  if (!extra.length) return notice
+  const issues = [...notice.issues, ...extra]
+  return { ...notice, issues, requiresAction: issues.some(issue => issue.blocking) }
 }

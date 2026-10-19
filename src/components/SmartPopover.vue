@@ -125,6 +125,9 @@ const updatePosition = () => {
     top = triggerRect.bottom + offset
   }
 
+  // 两侧空间都不足时仍留在窗口内；可滚动的偏好面板不能被翻到屏幕上方。
+  top = Math.max(10, Math.min(top, viewportHeight - popoverRect.height - 10))
+
   popoverRef.value.style.top = `${top}px`
   popoverRef.value.style.left = `${left}px`
 }
@@ -308,7 +311,7 @@ defineExpose({
   cursor: pointer;
 }
 
-.smart-popover {
+.smart-popover.ink-popover-panel {
   position: fixed;
   /* 视觉样式由 .ink-popover-panel 统一管理 (背景、边框、阴影、圆角、模糊等) */
   /* background, border, shadow, backdrop-filter, border-radius provided by ink-popover-panel */

@@ -102,6 +102,8 @@ const toListItem = (record: LocalAiRecord): AiRecordListItem => ({
   status: record.status,
   inputPreview: record.input.slice(0, 80),
   outputPreview: record.output.slice(0, 80),
+  input: record.input,
+  output: record.output,
   inputTokens: record.inputTokens,
   outputTokens: record.outputTokens,
   totalCost: 0,

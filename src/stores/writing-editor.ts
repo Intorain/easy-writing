@@ -1,4 +1,5 @@
 import { appSettings } from '@/storage/app-settings'
+import { ENTITY_HIGHLIGHT_DISMISS_STORAGE_KEY, parseDismissedEntityHighlights } from '@/utils/entity-highlight-preferences'
 
 import { defineStore } from "pinia";
 import piniaPersistConfig from "@/stores/helper/persist";
@@ -36,22 +37,10 @@ const clampMobilePreviewWidth = (value: number) =>
   Math.max(WRITING_MOBILE_PREVIEW_MIN_WIDTH, Math.min(WRITING_MOBILE_PREVIEW_MAX_WIDTH, Number(value) || WRITING_MOBILE_PREVIEW_DEFAULT_WIDTH));
 const clampWritingScrollRatio = (value: number) =>
   Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
-const ENTITY_HIGHLIGHT_DISMISS_STORAGE_KEY = 'ew-writing-entity-highlight-dismissed';
-
 const readDismissedEntityHighlightKeys = (): Record<string, string[]> => {
   if (typeof window === 'undefined') return {};
-  try {
-    const parsed = JSON.parse(appSettings.getItem(ENTITY_HIGHLIGHT_DISMISS_STORAGE_KEY) || '{}');
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
-    return Object.fromEntries(
-      Object.entries(parsed).map(([bookId, keys]) => [
-        bookId,
-        Array.isArray(keys) ? keys.map(item => String(item).trim()).filter(Boolean) : []
-      ])
-    );
-  } catch {
-    return {};
-  }
+  try { return parseDismissedEntityHighlights(appSettings.getItem(ENTITY_HIGHLIGHT_DISMISS_STORAGE_KEY)); }
+  catch { return {}; }
 };
 
 const writeDismissedEntityHighlightKeys = (value: Record<string, string[]>) => {
@@ -101,11 +90,19 @@ export interface WritingEditorState {
   typingSound: TypingSound; // 打字音效
   typingEffect: 'none' | 'splash' | 'ripple' | 'mist' | 'fire' | 'cheer'; // 打字特效
   selfDestructMode: 'off' | '10s' | '20s' | '1m' | '5m'; // 自爆模式
+  // --- 打字机与专注 ---
+  typewriterEnabled: boolean; // 打字机模式：光标低于基准线时自动上滚
+  typewriterRatio: TypewriterRatio; // 基准线在编辑区高度的百分之几
+  focusMode: boolean; // 专注模式：只亮当前段，其余段变淡
   mobilePreviewWidth: number; // 移动端预览宽度
   mobilePreviewScreenType: MobilePreviewScreenType; // 移动端预览屏幕形态
   writingScrollRatio: number; // 正文与预览同步滚动比例
   writingScrollSource: WritingScrollSource; // 当前滚动来源
 }
+
+/** 打字机基准线可选档位（编辑区高度的百分比） */
+export const TYPEWRITER_RATIOS = [40, 50, 60, 70] as const;
+export type TypewriterRatio = (typeof TYPEWRITER_RATIOS)[number];
 
 export const useWritingEditorStore = defineStore({
   id: 'ew-writing-editor',
@@ -142,6 +139,9 @@ export const useWritingEditorStore = defineStore({
     typingSound: 'typewriter', // 默认打字机音效
     typingEffect: 'ripple', // 默认涟漪特效
     selfDestructMode: 'off', // 默认关闭自爆模式
+    typewriterEnabled: false,
+    typewriterRatio: 50,
+    focusMode: false,
     mobilePreviewWidth: WRITING_MOBILE_PREVIEW_DEFAULT_WIDTH,
     mobilePreviewScreenType: 'notch',
     writingScrollRatio: 0,
@@ -170,22 +170,32 @@ export const useWritingEditorStore = defineStore({
       if (!normalizedKey) return;
       const current = this.dismissedEntityHighlightKeysByBook[bookKey] || [];
       if (current.includes(normalizedKey)) return;
-      this.dismissedEntityHighlightKeysByBook = {
-        ...this.dismissedEntityHighlightKeysByBook,
-        [bookKey]: [...current, normalizedKey]
-      };
-      writeDismissedEntityHighlightKeys(this.dismissedEntityHighlightKeysByBook);
+      const next = { ...this.dismissedEntityHighlightKeysByBook, [bookKey]: [...current, normalizedKey] };
+      writeDismissedEntityHighlightKeys(next);
+      this.dismissedEntityHighlightKeysByBook = next;
+    },
+    restoreEntityHighlight(bookId: string | number | undefined, key: string) {
+      const bookKey = String(bookId || 'global');
+      const normalizedKey = String(key || '').trim();
+      const current = this.dismissedEntityHighlightKeysByBook[bookKey] || [];
+      if (!normalizedKey || !current.includes(normalizedKey)) return;
+      const next = { ...this.dismissedEntityHighlightKeysByBook };
+      const remaining = current.filter(name => name !== normalizedKey);
+      if (remaining.length) next[bookKey] = remaining;
+      else delete next[bookKey];
+      writeDismissedEntityHighlightKeys(next);
+      this.dismissedEntityHighlightKeysByBook = next;
     },
     resetDismissedEntityHighlights(bookId?: string | number) {
+      const next = { ...this.dismissedEntityHighlightKeysByBook };
       if (!bookId) {
+        writeDismissedEntityHighlightKeys({});
         this.dismissedEntityHighlightKeysByBook = {};
-        writeDismissedEntityHighlightKeys(this.dismissedEntityHighlightKeysByBook);
         return;
       }
-      const next = { ...this.dismissedEntityHighlightKeysByBook };
       delete next[String(bookId)];
+      writeDismissedEntityHighlightKeys(next);
       this.dismissedEntityHighlightKeysByBook = next;
-      writeDismissedEntityHighlightKeys(this.dismissedEntityHighlightKeysByBook);
     },
     getDismissedEntityHighlightCount(bookId?: string | number) {
       if (!bookId) {
@@ -201,6 +211,9 @@ export const useWritingEditorStore = defineStore({
     setSettingTreeWidth(val: number) { this.settingTreeWidth = val; },
     setTypingSound(val: TypingSound) { this.typingSound = val; },
     setTypingEffect(val: 'none' | 'splash' | 'ripple' | 'mist' | 'fire' | 'cheer') { this.typingEffect = val; },
+    setTypewriterEnabled(val: boolean) { this.typewriterEnabled = val; },
+    setTypewriterRatio(val: TypewriterRatio) { this.typewriterRatio = val; },
+    setFocusMode(val: boolean) { this.focusMode = val; },
     setSelfDestructMode(val: 'off' | '10s' | '20s' | '1m' | '5m') { this.selfDestructMode = val; },
     setMobilePreviewWidth(val: number) { this.mobilePreviewWidth = clampMobilePreviewWidth(val); },
     setMobilePreviewScreenType(val: MobilePreviewScreenType) { this.mobilePreviewScreenType = val; },
@@ -262,6 +275,9 @@ export const useWritingEditorStore = defineStore({
       this.typingSound = 'typewriter';
       this.typingEffect = 'ripple';
       this.selfDestructMode = 'off';
+      this.typewriterEnabled = false;
+      this.typewriterRatio = 50;
+      this.focusMode = false;
       this.mobilePreviewWidth = WRITING_MOBILE_PREVIEW_DEFAULT_WIDTH;
       this.mobilePreviewScreenType = 'notch';
     },
@@ -269,5 +285,5 @@ export const useWritingEditorStore = defineStore({
       // this.resetToDefaultPreferences();
     }
   },
-  persist: piniaPersistConfig('ew-writing-editor', ['fontFamily', 'fontBold', 'fontColor', 'fontSize', 'fontLineHeight', 'contentWidth', 'isParagraphGap', 'rulerStyle', 'alignMode', 'entityHighlightEnabled', 'quickPolishToolbarEnabled', 'sidebarWidth', 'rightPanelWidth', 'rightPanelActiveTool', 'outlineTreeWidth', 'characterTreeWidth', 'settingTreeWidth', 'typingSound', 'typingEffect', 'selfDestructMode', 'mobilePreviewWidth', 'mobilePreviewScreenType'])
+  persist: piniaPersistConfig('ew-writing-editor', ['fontFamily', 'fontBold', 'fontColor', 'fontSize', 'fontLineHeight', 'contentWidth', 'isParagraphGap', 'rulerStyle', 'alignMode', 'entityHighlightEnabled', 'quickPolishToolbarEnabled', 'sidebarWidth', 'rightPanelWidth', 'rightPanelActiveTool', 'outlineTreeWidth', 'characterTreeWidth', 'settingTreeWidth', 'typingSound', 'typingEffect', 'selfDestructMode', 'typewriterEnabled', 'typewriterRatio', 'focusMode', 'mobilePreviewWidth', 'mobilePreviewScreenType'])
 })

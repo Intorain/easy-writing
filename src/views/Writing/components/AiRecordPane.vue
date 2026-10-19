@@ -146,32 +146,64 @@
         </template>
         <div v-else-if="!records.length" class="empty-state">暂无 AI 记录</div>
         <template v-else>
-          <div
-            v-for="record in records"
-            :key="`${record.recordType}-${record.id}`"
-            class="record-row"
-            :class="{ failed: record.status === 0 }"
-          >
-            <span class="record-info">
-              <!-- 不加载供应商临时链接（易过期/防盗链），统一用类型图标 -->
-              <span class="record-icon">
-                <i :class="record.recordType === 'image' ? 'fa-solid fa-image' : 'fa-solid fa-file-lines'"></i>
-              </span>
-              <span class="record-name">
-                <span class="name-line">
-                  <strong>{{ record.sceneLabel || record.scene || 'AI记录' }}</strong>
-                  <em class="status-pill" :class="statusClass(record.status)">{{ statusLabel(record.status) }}</em>
+          <div v-for="record in records" :key="recordKey(record)" class="record-group">
+            <!-- 点一行展开：看这次调用发给模型的完整输入、模型的输出与错误原文 -->
+            <div
+              class="record-row"
+              :class="{ failed: record.status === 0, expanded: expandedKey === recordKey(record) }"
+              role="button"
+              tabindex="0"
+              :aria-expanded="expandedKey === recordKey(record)"
+              @click="toggleDetail(record)"
+              @keydown.enter.prevent="toggleDetail(record)"
+              @keydown.space.prevent="toggleDetail(record)"
+            >
+              <span class="record-info">
+                <!-- 不加载供应商临时链接（易过期/防盗链），统一用类型图标 -->
+                <span class="record-icon">
+                  <i :class="record.recordType === 'image' ? 'fa-solid fa-image' : 'fa-solid fa-file-lines'"></i>
                 </span>
-                <span v-if="record.status === 0 && record.errorMsg" class="error-line">{{ record.errorMsg }}</span>
+                <span class="record-name">
+                  <span class="name-line">
+                    <strong>{{ record.sceneLabel || record.scene || 'AI记录' }}</strong>
+                    <em class="status-pill" :class="statusClass(record.status)">{{ statusLabel(record.status) }}</em>
+                    <i class="fa-solid fa-chevron-down row-chevron" aria-hidden="true"></i>
+                  </span>
+                  <span v-if="record.status === 0 && record.errorMsg" class="error-line">{{ record.errorMsg }}</span>
+                  <span v-else class="preview-line">{{ record.outputPreview || record.inputPreview || '' }}</span>
+                </span>
               </span>
-            </span>
 
-            <span class="record-model">{{ record.modelName || record.modelCode || '-' }}</span>
-            <span class="record-time">{{ record.createTime || '-' }}</span>
-            <span class="record-duration">{{ formatDuration(record.duration) }}</span>
+              <span class="record-model">{{ record.modelName || record.modelCode || '-' }}</span>
+              <span class="record-time">{{ record.createTime || '-' }}</span>
+              <span class="record-duration">{{ formatDuration(record.duration) }}</span>
 
-            <!-- 供应商响应带 usage 时是真实值，流式/生图按字数估算 -->
-            <span class="record-cost">{{ formatNumber(record.inputTokens + record.outputTokens) }}</span>
+              <!-- 供应商响应带 usage 时是真实值，流式/生图按字数估算 -->
+              <span class="record-cost">{{ formatNumber(record.inputTokens + record.outputTokens) }}</span>
+            </div>
+
+            <div v-if="expandedKey === recordKey(record)" class="record-detail">
+              <p v-if="record.status === 0 && record.errorMsg" class="detail-error">
+                <i class="fa-solid fa-circle-exclamation"></i>
+                {{ record.errorMsg }}
+              </p>
+              <div class="detail-grid">
+                <div class="detail-block">
+                  <div class="detail-head">
+                    <span>输入<small>（发给模型的内容，账本最多留 2000 字）</small></span>
+                    <button type="button" class="detail-copy" :disabled="!record.input" @click.stop="copyText(record.input)">复制</button>
+                  </div>
+                  <pre>{{ record.input || '（空）' }}</pre>
+                </div>
+                <div class="detail-block">
+                  <div class="detail-head">
+                    <span>输出</span>
+                    <button type="button" class="detail-copy" :disabled="!record.output" @click.stop="copyText(record.output)">复制</button>
+                  </div>
+                  <pre>{{ record.output || (record.status === 0 ? '（调用失败，没有输出）' : '（空）') }}</pre>
+                </div>
+              </div>
+            </div>
           </div>
         </template>
       </div>
@@ -196,6 +228,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import { ElMessage } from 'element-plus'
 import { showApiError } from '@/utils/api-error'
 import type {
   AiRecordListItem,
@@ -231,6 +264,22 @@ const statusOptions: Array<{ label: string; value: AiRecordStatus; tone?: string
 
 const records = ref<AiRecordListItem[]>([])
 const loading = ref(false)
+/** 当前展开详情的那一行；翻页、刷新后收起 */
+const expandedKey = ref('')
+const recordKey = (record: AiRecordListItem) => `${record.recordType}-${record.id}`
+const toggleDetail = (record: AiRecordListItem) => {
+  const key = recordKey(record)
+  expandedKey.value = expandedKey.value === key ? '' : key
+}
+const copyText = async (text?: string) => {
+  if (!text) return
+  try {
+    await navigator.clipboard.writeText(text)
+    ElMessage.success('已复制')
+  } catch {
+    ElMessage.error('复制失败，请手动选择文本')
+  }
+}
 // 骨架行数跟随当前列表高度，翻页时保持等高；首次加载按页大小占位
 const skeletonCount = computed(() => records.value.length || Math.min(pagination.size, 10))
 const summary = reactive<AiRecordSummary>({
@@ -310,6 +359,7 @@ const loadRecords = async (page = pagination.page) => {
       getAiRecordSummaryApi(stripPageQuery(payload)),
     ])
     records.value = pageRes.data?.list || []
+    expandedKey.value = ''
     pagination.page = pageRes.data?.pagination?.page || page
     pagination.size = pageRes.data?.pagination?.size || payload.size
     pagination.total = pageRes.data?.pagination?.total || 0
@@ -475,24 +525,27 @@ const formatNumber = (value?: number, fraction = 0) => {
   white-space: nowrap;
 }
 
+// 分段切换：外层只是一条淡色轨道，没有边框；选中项是浮起的实心块。
+// 筛选条本身已有一圈边框，这里再画边框就会出现套了两三层框的效果。
 .segmented {
   display: inline-flex;
-  padding: 2px;
+  padding: 3px;
   gap: 2px;
-  border: 1px solid var(--ui-border-hover, var(--ui-border));
   border-radius: 8px;
+  background: color-mix(in srgb, var(--ink-main) 7%, transparent);
 }
 
 .segment-btn {
-  padding: 5px 12px;
-  border: 1px solid transparent;
+  padding: 4px 12px;
+  border: 0;
   border-radius: 6px;
   background: transparent;
   color: var(--ink-sec);
   font-size: 12px;
+  line-height: 1.5;
   white-space: nowrap;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
 
   &:hover {
     color: var(--ink-main);
@@ -509,18 +562,16 @@ const formatNumber = (value?: number, fraction = 0) => {
   &.active {
     color: var(--ink-accent);
     font-weight: 600;
-    border-color: color-mix(in srgb, var(--ink-accent) 45%, transparent);
-    background: color-mix(in srgb, var(--ink-accent) 10%, transparent);
+    background: var(--input-bg);
+    box-shadow: 0 1px 3px color-mix(in srgb, var(--ink-main) 16%, transparent);
 
     &.tone-success {
       color: var(--state-success-on);
-      border-color: #bbe7c9;
-      background: #ecfdf1;
+      background: var(--state-success-surface);
     }
 
     &.tone-fail {
       color: var(--state-danger-on);
-      border-color: #f5c8c8;
       background: var(--state-danger-surface);
     }
   }
@@ -600,10 +651,21 @@ $record-columns: minmax(240px, 1.6fr) minmax(140px, 1fr) 168px 72px 110px;
   padding: 12px 14px;
   border-top: 1px solid var(--ui-border);
   font-size: 13px;
+  cursor: pointer;
   transition: background 0.15s ease;
 
-  &:hover {
+  &:hover,
+  &.expanded {
     background: color-mix(in srgb, var(--ink-accent) 4%, transparent);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--ink-accent);
+    outline-offset: -2px;
+  }
+
+  &.expanded .row-chevron {
+    transform: rotate(180deg);
   }
 
   &.failed {
@@ -656,12 +718,111 @@ $record-columns: minmax(240px, 1.6fr) minmax(140px, 1fr) 168px 72px 110px;
     white-space: nowrap;
   }
 
-  .error-line {
+  .error-line,
+  .preview-line {
     overflow: hidden;
-    color: var(--state-danger);
     font-size: 12px;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .error-line {
+    color: var(--state-danger);
+  }
+
+  .preview-line {
+    color: var(--settings-muted-color, var(--ink-sec));
+  }
+
+  .row-chevron {
+    flex: 0 0 auto;
+    font-size: 10px;
+    color: var(--settings-muted-color, var(--ink-sec));
+    transition: transform 0.18s ease;
+  }
+}
+
+/* 展开的详情：输入输出并排，各自可滚动，不把列表撑得太长 */
+.record-detail {
+  padding: 0 14px 14px 58px;
+  background: color-mix(in srgb, var(--ink-accent) 4%, transparent);
+}
+
+.detail-error {
+  margin: 0 0 10px;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  color: var(--state-danger);
+  font-size: 12.5px;
+  line-height: 1.6;
+  word-break: break-word;
+
+  i {
+    margin-top: 3px;
+  }
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.detail-block {
+  min-width: 0;
+
+  pre {
+    margin: 0;
+    max-height: 280px;
+    overflow: auto;
+    padding: 10px 12px;
+    border: 1px solid var(--ui-border);
+    border-radius: 8px;
+    background: var(--ui-glass-bg);
+    color: var(--ink-main);
+    font: inherit;
+    font-size: 12.5px;
+    line-height: 1.65;
+    white-space: pre-wrap;
+    word-break: break-word;
+    user-select: text;
+  }
+}
+
+.detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-main);
+
+  small {
+    margin-left: 4px;
+    font-weight: 400;
+    color: var(--settings-muted-color, var(--ink-sec));
+  }
+}
+
+.detail-copy {
+  padding: 2px 8px;
+  border: 1px solid var(--input-border);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink-accent);
+  font-size: 11px;
+  cursor: pointer;
+
+  &:hover:not(:disabled) {
+    border-color: var(--ink-accent);
+  }
+
+  &:disabled {
+    color: var(--settings-muted-color, var(--ink-sec));
+    cursor: not-allowed;
   }
 }
 
@@ -781,6 +942,14 @@ $record-columns: minmax(240px, 1.6fr) minmax(140px, 1fr) 168px 72px 110px;
 @media (max-width: 1100px) {
   .record-head {
     display: none;
+  }
+
+  .record-detail {
+    padding-left: 14px;
+  }
+
+  .detail-grid {
+    grid-template-columns: 1fr;
   }
 
   .record-row {

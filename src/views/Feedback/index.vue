@@ -4,7 +4,7 @@
       <div class="page-head">
         <p class="eyebrow">反馈中心</p>
         <h1>问题反馈</h1>
-        <p class="desc">开源版的反馈统一在 GitHub Issues 跟进。在左侧写好内容，一键复制后到 GitHub 新建 Issue 粘贴即可。</p>
+        <p class="desc">反馈请提交到 GitHub Issues，或通过邮箱、微信群联系。</p>
       </div>
 
       <div class="feedback-layout">
@@ -61,41 +61,53 @@
           </div>
         </div>
 
-        <aside class="guide-panel">
-          <div class="guide-head">
-            <h2>如何提交</h2>
-            <p>三步完成反馈，处理进展在 Issue 里跟进</p>
+        <aside class="contact-panel">
+          <div class="contact-head">
+            <h2>联系我</h2>
           </div>
-
-          <ol class="guide-steps">
-            <li>在左侧写清问题标题和描述</li>
-            <li>点「复制并前往 GitHub」，内容会复制到剪贴板</li>
-            <li>在打开的页面新建 Issue，粘贴内容并提交</li>
-          </ol>
-
-          <p class="guide-tip">有截图或录屏可以直接拖进 Issue 编辑框，比文字更直观。</p>
-
-          <div class="guide-actions">
-            <button class="ink-btn ink-btn-primary" type="button" @click="openNewIssue">
-              <i class="fa-brands fa-github"></i>
-              新建 Issue
-            </button>
-            <button class="ink-btn ink-btn-outline" type="button" @click="openIssueList">
-              查看已有反馈
-            </button>
+          <ul class="contact-list">
+            <li>
+              <span>官网</span>
+              <a href="#" @click.prevent="openSite">{{ siteLabel }}</a>
+            </li>
+            <li>
+              <span>邮箱</span>
+              <button type="button" class="contact-copy" title="复制邮箱" @click="copyEmail">
+                {{ CONTACT_EMAIL }}<i class="fa-regular fa-copy"></i>
+              </button>
+            </li>
+          </ul>
+          <div class="contact-qrs">
+            <figure class="contact-qr">
+              <img :src="personalQr" alt="微信二维码" @error="useBundledPersonalQr" />
+              <figcaption>微信</figcaption>
+            </figure>
+            <figure class="contact-qr">
+              <img :src="groupQr" alt="易创网文反馈群二维码" @error="useBundledGroupQr" />
+              <figcaption>易创网文反馈群</figcaption>
+            </figure>
           </div>
         </aside>
       </div>
+
     </section>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, reactive } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { openLink } from '@/utils/external-link'
-import { GITHUB_ISSUES_URL, GITHUB_NEW_ISSUE_URL } from '@/config/opensource'
+import {
+  CONTACT_EMAIL,
+  GITHUB_NEW_ISSUE_URL,
+  OFFICIAL_SITE_URL,
+  WECHAT_GROUP_QR_URL,
+  WECHAT_PERSONAL_QR_URL
+} from '@/config/opensource'
+import bundledGroupQr from '@/assets/images/feedback-wechat-group.png'
+import bundledPersonalQr from '@/assets/images/feedback-wechat.png'
 
 const route = useRoute()
 
@@ -192,13 +204,28 @@ const submitToGitHub = async () => {
   await openLink(GITHUB_NEW_ISSUE_URL)
 }
 
-const openNewIssue = () => {
-  void openLink(GITHUB_NEW_ISSUE_URL)
+const siteLabel = OFFICIAL_SITE_URL.replace(/^https?:\/\//, '')
+// 二维码先取官网上的最新一张，取不到再用安装包里带的
+const groupQr = ref(WECHAT_GROUP_QR_URL)
+const personalQr = ref(WECHAT_PERSONAL_QR_URL)
+const useBundledGroupQr = () => {
+  if (groupQr.value !== bundledGroupQr) groupQr.value = bundledGroupQr
+}
+const useBundledPersonalQr = () => {
+  if (personalQr.value !== bundledPersonalQr) personalQr.value = bundledPersonalQr
+}
+const openSite = () => {
+  void openLink(OFFICIAL_SITE_URL)
+}
+const copyEmail = async () => {
+  try {
+    await navigator.clipboard.writeText(CONTACT_EMAIL)
+    ElMessage.success('邮箱已复制')
+  } catch {
+    ElMessage.error('复制失败，请手动抄下邮箱')
+  }
 }
 
-const openIssueList = () => {
-  void openLink(GITHUB_ISSUES_URL)
-}
 </script>
 
 <style scoped lang="scss">
@@ -248,7 +275,7 @@ const openIssueList = () => {
 }
 
 .submit-panel,
-.guide-panel,
+.contact-panel,
 .context-box,
 .preview-box {
   border: 1px solid var(--ui-border);
@@ -360,61 +387,106 @@ const openIssueList = () => {
   flex-wrap: wrap;
 }
 
-.guide-panel {
-  padding: 20px;
+.contact-panel {
+  padding: 24px;
   position: sticky;
   top: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
 }
 
-.guide-head {
-  margin-bottom: 16px;
-
+.contact-head {
   h2 {
     margin: 0 0 6px;
     font-size: 20px;
     color: var(--ink-main);
   }
 
-  p {
-    margin: 0;
+}
+
+.contact-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 15px;
+
+  li {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+
+  span {
+    flex: 0 0 2.5em;
     font-size: 13px;
     color: var(--ink-sec);
   }
-}
 
-.guide-steps {
-  margin: 0 0 16px;
-  padding-left: 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  color: var(--ink-main);
-  font-size: 14px;
-  line-height: 1.7;
-}
-
-.guide-tip {
-  margin: 0 0 20px;
-  padding: 10px 12px;
-  border-radius: 10px;
-  border: 1px dashed var(--ui-border);
-  color: var(--ink-sec);
-  font-size: 13px;
-  line-height: 1.7;
-}
-
-.guide-actions {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-
-  .ink-btn {
-    width: 100%;
+  a {
+    color: var(--ink-accent);
+    text-decoration: none;
   }
+}
+
+.contact-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink-main);
+  font: inherit;
+  cursor: pointer;
 
   i {
-    margin-right: 6px;
+    color: var(--ink-sec);
+    font-size: 13px;
   }
+
+  &:hover i {
+    color: var(--ink-accent);
+  }
+}
+
+.contact-qrs {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--ui-border);
+}
+
+.contact-qr {
+  margin: 12px 0 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+
+  img {
+    width: 220px;
+    height: 220px;
+    padding: 10px;
+    border-radius: 14px;
+    border: 1px solid var(--ui-border);
+    background: #fff;
+    object-fit: contain;
+  }
+
+  figcaption {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    font-size: 14px;
+    color: var(--ink-main);
+  }
+
 }
 
 @include content-max(800px) {
@@ -422,7 +494,7 @@ const openIssueList = () => {
     grid-template-columns: 1fr;
   }
 
-  .guide-panel {
+  .contact-panel {
     position: static;
   }
 }
@@ -438,7 +510,7 @@ const openIssueList = () => {
   }
 
   .submit-panel,
-  .guide-panel {
+  .contact-panel {
     padding: 16px;
   }
 

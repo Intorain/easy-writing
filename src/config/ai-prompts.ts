@@ -9,9 +9,6 @@ import { promptTemperature, promptText, renderPromptText } from '@/storage/local
  * （正文、选中文本、参数）代入用户可编辑的模板。
  */
 
-/** 对话历史带入的最大条数（一问一答算两条），控制上下文规模 */
-const CHAT_HISTORY_WINDOW = 20
-
 // ---------------------------------------------------------------------------
 // 通用：带上下文的自由指令生成（起章名/写细纲/提章纲这类"给素材出结果"场景）
 // ---------------------------------------------------------------------------
@@ -170,11 +167,16 @@ export const buildAutocompleteMessages = (params: {
   sceneAnchor?: string
   chapterTitle?: string
   chapterSummary?: string
+  /** Agent 上下文引擎装配的作品资料（作者规则、人物状态等）；只作参考数据 */
+  contextBlocks?: string
   mode: 'inline' | 'next_beat'
   characterContext?: string
 }): LocalChatMessageInput[] => {
   const modeLine = promptText('editor-autocomplete', params.mode === 'next_beat' ? 'nextBeat' : 'inline')
   const parts = [
+    params.contextBlocks
+      ? `【作品资料（仅作参考，须遵守其中的作者规则与否决约束，不要复述）】\n${params.contextBlocks}`
+      : '',
     params.characterContext || '',
     params.chapterTitle ? `【本章】${params.chapterTitle}` : '',
     params.chapterSummary ? `【本章目标】${params.chapterSummary}` : '',
@@ -196,7 +198,7 @@ export const autocompleteTemperature = (mode: 'inline' | 'next_beat'): number | 
 // 编辑器：划词动作（润色/扩写/修错/自定义指令）
 // ---------------------------------------------------------------------------
 
-export type SelectionActionType = 'polish' | 'expand' | 'fix' | 'custom'
+export type SelectionActionType = 'polish' | 'expand' | 'fix' | 'deai' | 'voice' | 'custom'
 
 export const buildSelectionActionMessages = (params: {
   action: SelectionActionType
@@ -206,10 +208,18 @@ export const buildSelectionActionMessages = (params: {
   chapterTitle?: string
   chapterSummary?: string
   sceneAnchor?: string
+  /** voice 动作：人物名与其语言指纹（人物资料里的“语言指纹”字段） */
+  characterName?: string
+  voice?: string
 }): LocalChatMessageInput[] => {
   const actionLine = params.action === 'custom'
     ? renderPromptText('editor-selection', 'custom', { 指令: String(params.instruction || '').trim() })
-    : promptText('editor-selection', params.action)
+    : params.action === 'voice'
+      ? renderPromptText('editor-selection', 'voice', {
+          人物: String(params.characterName || '').trim(),
+          口吻: String(params.voice || '').trim() || '（作者尚未填写语言指纹，请根据上下文里这个人物已有的说话方式推断）',
+        })
+      : promptText('editor-selection', params.action)
   const parts = [
     params.chapterTitle ? `【本章】${params.chapterTitle}` : '',
     params.chapterSummary ? `【本章目标】${params.chapterSummary}` : '',
@@ -227,29 +237,94 @@ export const buildSelectionActionMessages = (params: {
 export const selectionActionTemperature = (action: SelectionActionType): number | undefined =>
   promptTemperature('editor-selection', action)
 
-export const buildMiaobiMessages = (params: {
-  query: string
-  context?: string
-  modeInstruction?: string
-  history?: Array<{ role: 'user' | 'ai'; content: string }>
+// ---------------------------------------------------------------------------
+// 故事状态整理：一章正文 → 事实列表（JSON）
+// ---------------------------------------------------------------------------
+
+/** 单章正文送入抽取的字数上限：超长章按开头截断并说明，避免撑爆上下文 */
+export const FACT_EXTRACTION_MAX_CHARS = 20000
+
+export const buildFactExtractionMessages = (params: {
+  chapterTitle: string
+  chapterOrder: number
+  text: string
+  /** 角色名单（正式名与别名），一行一个 */
+  roster: string
+  /** 截至上一章仍未回收的伏笔，一行一个，带编号 */
+  openForeshadows: string
 }): LocalChatMessageInput[] => {
-  const messages: LocalChatMessageInput[] = []
-  const system = [promptText('miaobi', 'system'), String(params.modeInstruction || '').trim()]
-    .filter(Boolean)
-    .join('\n\n')
-  messages.push({ role: 'system', content: system })
-
-  for (const item of (params.history || []).slice(-CHAT_HISTORY_WINDOW)) {
-    const content = String(item.content || '').trim()
-    if (!content) continue
-    messages.push({ role: item.role === 'ai' ? 'assistant' : 'user', content })
-  }
-
-  const context = String(params.context || '').trim()
-  const query = String(params.query || '').trim()
-  messages.push({ role: 'user', content: context ? `${context}\n\n${query}` : query })
-  return messages
+  const text = params.text.length > FACT_EXTRACTION_MAX_CHARS
+    ? `${params.text.slice(0, FACT_EXTRACTION_MAX_CHARS)}\n（正文过长，以下省略）`
+    : params.text
+  return [
+    { role: 'system', content: promptText('story-facts', 'system') },
+    {
+      role: 'user',
+      content: [
+        `【章节】第 ${params.chapterOrder} 章《${params.chapterTitle}》`,
+        params.roster ? `【角色名单】\n${params.roster}` : '',
+        `【未回收伏笔】\n${params.openForeshadows || '（无）'}`,
+        `【正文】\n${text}`,
+        `【任务】${promptText('story-facts', 'task')}`,
+      ]
+        .filter(Boolean)
+        .join('\n\n'),
+    },
+  ]
 }
+
+// ---------------------------------------------------------------------------
+// 正文核对与修订：草稿 + 已知状态/角色资料/规则 → 问题清单（JSON）→ 最小改动修订
+// ---------------------------------------------------------------------------
+
+const materialBlocks = (entries: Array<[string, string | undefined]>) =>
+  entries
+    .filter(([, value]) => String(value || '').trim())
+    .map(([label, value]) => `【${label}】\n${String(value).trim()}`)
+
+export const buildDraftReviewMessages = (params: {
+  draft: string
+  previousTail?: string
+  knownState?: string
+  characters?: string
+  rules?: string
+}): LocalChatMessageInput[] => [
+  { role: 'system', content: promptText('draft-guard', 'reviewSystem') },
+  {
+    role: 'user',
+    content: [
+      ...materialBlocks([
+        ['本书规则', params.rules],
+        ['角色资料', params.characters],
+        ['已知状态（截至草稿之前）', params.knownState],
+        ['前文结尾', params.previousTail],
+      ]),
+      `【草稿】\n${params.draft}`,
+      `【任务】${promptText('draft-guard', 'reviewTask')}`,
+    ].join('\n\n'),
+  },
+]
+
+export const buildDraftReviseMessages = (params: {
+  draft: string
+  issues: string
+  previousTail?: string
+  rules?: string
+}): LocalChatMessageInput[] => [
+  { role: 'system', content: promptText('draft-guard', 'reviseSystem') },
+  {
+    role: 'user',
+    content: [
+      ...materialBlocks([
+        ['本书规则', params.rules],
+        ['前文结尾', params.previousTail],
+      ]),
+      `【问题清单】\n${params.issues}`,
+      `【草稿】\n${params.draft}`,
+      `【任务】${promptText('draft-guard', 'reviseTask')}`,
+    ].join('\n\n'),
+  },
+]
 
 // ---------------------------------------------------------------------------
 // 榜单：趋势解读报告（数据分析面板，全部依据本机快照数据）

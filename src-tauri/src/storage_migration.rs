@@ -8,10 +8,47 @@ use sqlx::{sqlite::SqliteConnectOptions, Connection, Row, SqliteConnection};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    path::Path,
-    sync::atomic::{AtomicU64, Ordering},
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, AtomicUsize, Ordering},
+    sync::{Mutex, OnceLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+
+/// 完整性检查（PRAGMA quick_check，大库上要一秒）一个进程里对同一个库只做一次：启动链路会连着检查三遍。
+/// 换过库文件（恢复备份、迁移提交、补全凭据）后要重新检查，由 `forget_health` 清掉记录。
+fn health_cache() -> &'static Mutex<BTreeSet<PathBuf>> {
+    static CACHE: OnceLock<Mutex<BTreeSet<PathBuf>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(BTreeSet::new()))
+}
+static HEALTH_CHECKS: AtomicUsize = AtomicUsize::new(0);
+
+pub fn forget_health(root: &Path) {
+    if let Ok(mut cache) = health_cache().lock() {
+        cache.remove(&root.to_path_buf());
+    }
+}
+
+/// 本进程实际跑过几次完整性检查（测试用）
+#[cfg(test)]
+pub(crate) fn health_checks_run() -> usize {
+    HEALTH_CHECKS.load(Ordering::SeqCst)
+}
+
+async fn check_health(db: &mut SqliteConnection, root: &Path) -> Result<(), String> {
+    if health_cache().lock().map_err(err)?.contains(root) {
+        return Ok(());
+    }
+    let health: Vec<String> = sqlx::query_scalar("PRAGMA quick_check")
+        .fetch_all(&mut *db)
+        .await
+        .map_err(err)?;
+    HEALTH_CHECKS.fetch_add(1, Ordering::SeqCst);
+    if health != ["ok"] {
+        return Err(invalid("数据库完整性检查未通过"));
+    }
+    health_cache().lock().map_err(err)?.insert(root.to_path_buf());
+    Ok(())
+}
 
 pub const CURRENT_VERSION: i64 = 1;
 const VERSION_KEY: &str = "storage-schema-version";
@@ -463,13 +500,7 @@ pub async fn inspect_at(root: &Path) -> Result<Inspection, String> {
         return Err(invalid("旧版迁移完成标记无效"));
     }
     let r = receipt(&mut tx, &present).await?;
-    let health: Vec<String> = sqlx::query_scalar("PRAGMA quick_check")
-        .fetch_all(&mut *tx)
-        .await
-        .map_err(err)?;
-    if health != ["ok"] {
-        return Err(invalid("数据库完整性检查未通过"));
-    }
+    check_health(&mut tx, root).await?;
     let mut core_count = 0;
     for (table, _, _) in CORE_TABLES {
         core_count += count(&mut tx, table, &present).await?;
@@ -494,12 +525,26 @@ pub async fn inspect_at(root: &Path) -> Result<Inspection, String> {
                 "desktop_migrations",
                 "desktop_migration_parts",
                 "_sqlx_migrations",
+                // Agent 索引器的派生表在每次连接时随核心表一起建立（agent_indexer::ensure_schema），
+                // 全新安装的库里也有；FTS5 虚拟表还会带出 chapter_fts_* 影子表。
+                "agent_outbox",
+                "chapter_chunks",
+                "canon_entities",
+                // 记忆检索表（索引版本 2），同样随连接建立、可重建
+                "memory_chunks",
+                // 向量表（索引版本 3）：切块与记忆的向量，随连接建立、可重算
+                "chapter_vectors",
+                "memory_vectors",
             ])
             .collect();
-        if present
-            .iter()
-            .any(|table| !table.starts_with("sqlite_") && !known.contains(table.as_str()))
-        {
+        // ai_* 是检索索引表（含 FTS5 的影子表），chapter_fts* / memory_fts* 是 Agent 全文索引的影子表；都是本应用自己建的，可随时重建
+        if present.iter().any(|table| {
+            !table.starts_with("sqlite_")
+                && !table.starts_with("ai_")
+                && !table.starts_with("chapter_fts")
+                && !table.starts_with("memory_fts")
+                && !known.contains(table.as_str())
+        }) {
             return Err(invalid(
                 "未标记版本的数据库含未知数据表，不能按全新安装处理",
             ));
@@ -637,7 +682,9 @@ pub async fn finalize_metadata_at(root: &Path, token: &str) -> Result<(), String
         notes: Vec::new(),
     });
     complete(&mut tx, &mut r).await?;
-    tx.commit().await.map_err(err)
+    tx.commit().await.map_err(err)?;
+    forget_health(root);
+    Ok(())
 }
 
 /// A legacy-mode full restore installs all data and the selection receipt in the same transaction.
@@ -923,7 +970,71 @@ pub async fn commit_at(
     }
     r.notes = desktop_storage::apply_migration_records(root, &mut tx, &expected).await?;
     complete(&mut tx, &mut r).await?;
-    tx.commit().await.map_err(err)
+    tx.commit().await.map_err(err)?;
+    forget_health(root);
+    Ok(())
+}
+
+/// 迁移完成后暂存表只留有核对价值的行：提交时被跳过的旧库记录（回执 notes 里记着名字），其余删掉并回收空间。
+/// 启动就绪后调一次；没有可删的直接返回 None。暂存里的内容都已在正式表里，IndexedDB 原件也还在。
+pub async fn prune_stage_at(root: &Path) -> Result<Option<Value>, String> {
+    let _lock = protocol_lock().lock().await;
+    let mut db = desktop_storage::connect_existing_at(root).await?;
+    let present = tables(&mut db).await?;
+    if !present.contains("desktop_migration_stage") {
+        return Ok(None);
+    }
+    let Some(r) = receipt(&mut db, &present).await? else { return Ok(None) };
+    if r.status != "complete" || r.origin != "migrated" {
+        return Ok(None);
+    }
+    let total = count(&mut db, "desktop_migration_stage", &present).await?;
+    if total == 0 {
+        return Ok(None);
+    }
+    // 被跳过的行："{table}/{key}：原因" → 暂存里的 namespace legacy-core/{table}、key 的 JSON 文本
+    let kept: BTreeSet<(String, String)> = r
+        .notes
+        .iter()
+        .filter_map(|note| {
+            let (path, _) = note.split_once('：')?;
+            let (table, key) = path.split_once('/')?;
+            Some((format!("legacy-core/{table}"), key.to_owned()))
+        })
+        .collect();
+    let rows = sqlx::query("SELECT namespace,key FROM desktop_migration_stage")
+        .fetch_all(&mut db)
+        .await
+        .map_err(err)?;
+    let mut tx = db.begin().await.map_err(err)?;
+    let mut deleted = 0u64;
+    for row in &rows {
+        let namespace: String = row.get("namespace");
+        let key: String = row.get("key");
+        let plain = serde_json::from_str::<Value>(&key)
+            .map(|v| match v {
+                Value::String(s) => s,
+                other => other.to_string(),
+            })
+            .unwrap_or_else(|_| key.clone());
+        if kept.contains(&(namespace.clone(), plain)) {
+            continue;
+        }
+        sqlx::query("DELETE FROM desktop_migration_stage WHERE namespace=? AND key=?")
+            .bind(&namespace)
+            .bind(&key)
+            .execute(&mut *tx)
+            .await
+            .map_err(err)?;
+        deleted += 1;
+    }
+    if present.contains("desktop_migration_parts") {
+        sqlx::query("DELETE FROM desktop_migration_parts").execute(&mut *tx).await.map_err(err)?;
+    }
+    tx.commit().await.map_err(err)?;
+    // 回收空间：VACUUM 不能在事务里跑；有别的连接持有事务时会失败，下次启动再试
+    let vacuumed = sqlx::query("VACUUM").execute(&mut db).await.is_ok();
+    Ok(Some(json!({"deleted":deleted,"kept":(total - deleted),"vacuumed":vacuumed})))
 }
 pub async fn fail_at(root: &Path, run_id: &str, message: &str) -> Result<(), String> {
     let _lock = protocol_lock().lock().await;
@@ -1021,7 +1132,10 @@ pub async fn desktop_storage_activate(
 
 #[tauri::command]
 pub async fn desktop_storage_inspect(app: crate::DesktopAppHandle) -> Result<Inspection, String> {
-    inspect_at(&desktop_storage::root(&app)?).await
+    let root = desktop_storage::root(&app)?;
+    // 上次启动若留下迁移前副本的恢复标记，先按标记恢复再检查
+    crate::startup_recovery::recover_at(&root)?;
+    inspect_at(&root).await
 }
 #[tauri::command]
 pub async fn desktop_storage_finalize(
@@ -1349,6 +1463,34 @@ mod tests {
                 inspect_at(&root.0).await.unwrap().state,
                 StartupState::Ready
             );
+        });
+    }
+    #[test]
+    fn health_check_runs_once_per_process_and_stage_is_pruned_after_commit() {
+        tauri::async_runtime::block_on(async {
+            let root = Temp::new();
+            let (plan, m) = prepare(&root.0, &source()).await;
+            stage_all(&root.0, &plan, &source()).await;
+            let before = health_checks_run();
+            inspect_at(&root.0).await.unwrap();
+            inspect_at(&root.0).await.unwrap();
+            assert_eq!(health_checks_run() - before, 1, "启动链路连着检查几遍，完整性检查只跑一次");
+            forget_health(&root.0);
+            inspect_at(&root.0).await.unwrap();
+            assert_eq!(health_checks_run() - before, 2, "换过库文件后重新检查");
+            let mut db = desktop_storage::connect_at(&root.0).await.unwrap();
+            let staged = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM desktop_migration_stage").fetch_one(&mut db).await.unwrap();
+            assert!(staged > 0);
+            // 没提交之前不清：暂存还是迁移的工作区
+            assert!(prune_stage_at(&root.0).await.unwrap().is_none());
+            commit_at(&root.0, &plan.run_id, m).await.unwrap();
+            let summary = prune_stage_at(&root.0).await.unwrap().unwrap();
+            assert_eq!(summary["deleted"], staged);
+            assert_eq!(summary["kept"], 0);
+            assert_eq!(sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM desktop_migration_stage").fetch_one(&mut db).await.unwrap(), 0);
+            assert_eq!(sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM desktop_migration_parts").fetch_one(&mut db).await.unwrap(), 0);
+            assert_eq!(inspect_at(&root.0).await.unwrap().state, StartupState::Ready, "清理不改变启动状态");
+            assert!(prune_stage_at(&root.0).await.unwrap().is_none(), "清过就没有可清的了");
         });
     }
     #[test]

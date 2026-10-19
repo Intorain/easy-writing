@@ -14,11 +14,28 @@ export interface LocalChatSession {
   updateTime: string
 }
 
+/** 回答时查阅过的一步（给作者看的一句话 + 结果状态） */
+export interface LocalChatMessageStep {
+  id: string
+  label: string
+  status: 'running' | 'done' | 'error'
+  detail?: string
+}
+
+/** 回答依据的资料来源（章节/角色/设定……） */
+export interface LocalChatMessageSource {
+  kind: string
+  id: string
+  label: string
+}
+
 export interface LocalChatMessage {
   id: number
   role: 'user' | 'ai'
   content: string
   createTime: string
+  steps?: LocalChatMessageStep[]
+  sources?: LocalChatMessageSource[]
 }
 
 const DB_NAME = 'ew-local-ai-chat'
@@ -119,7 +136,7 @@ export const deleteLocalChatMessage = async (data: { id: number }) => {
 /** 一轮问答落库（面板流式结束时调用），并顶新会话的更新时间 */
 export const appendLocalChatMessages = async (
   sessionId: number,
-  entries: Array<{ role: 'user' | 'ai'; content: string }>
+  entries: Array<{ role: 'user' | 'ai'; content: string; steps?: LocalChatMessageStep[]; sources?: LocalChatMessageSource[] }>
 ) => {
   const key = messagesKey(sessionId)
   const messages = await readList<LocalChatMessage>(key)
@@ -129,6 +146,8 @@ export const appendLocalChatMessages = async (
       role: entry.role,
       content: entry.content,
       createTime: nowIso(),
+      ...(entry.steps?.length ? { steps: entry.steps } : {}),
+      ...(entry.sources?.length ? { sources: entry.sources } : {}),
     })
   }
   await writeList(key, messages)

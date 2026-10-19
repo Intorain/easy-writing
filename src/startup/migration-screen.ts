@@ -3,6 +3,8 @@ import './migration-screen.css'
 
 /** This screen must not load application stores before the migration gate has completed. */
 export function createMigrationScreen(root: HTMLElement, retry = () => window.location.reload()) {
+  // 迁移页有自己的进度与说明，启动占位到这里为止
+  document.getElementById('ew-boot')?.remove()
   const screen = document.createElement('main')
   screen.className = 'migration-screen'
   screen.innerHTML = `

@@ -13,6 +13,7 @@ import type {
   UpdateLocalBookOptions
 } from './local-library-types'
 import {
+  nextSortNo,
   buildLocalTree,
   calcLocalBookStatsWithDrafts,
   loadLocalDraftWordCounts,
@@ -366,7 +367,10 @@ export class IndexedDbLocalLibraryStorage implements LocalLibraryStorage {
   }
 
   async createLocalVolume(payload: { bookId: number | string; title: string; summary?: string; sortNo?: number; planMeta?: JsonRecord | null }) {
-    const volume = normalizeLocalVolume(payload)
+    // 不指定序号就接在末尾；序号 0 会排到最前面
+    const volumes = (await this.all<LocalVolume>(STORE_VOLUMES)).filter(item => String(item.bookId) === String(payload.bookId) && !item.deletedAt)
+    const sortNo = payload.sortNo ?? nextSortNo(volumes)
+    const volume = normalizeLocalVolume({ ...payload, sortNo })
     await this.put(STORE_VOLUMES, volume)
     await this.refreshBookStats(payload.bookId)
     return volume
@@ -409,7 +413,8 @@ export class IndexedDbLocalLibraryStorage implements LocalLibraryStorage {
   }
 
   async createLocalChapter(payload: { bookId: number | string; volumeId: number | string; title: string; summary?: string; sortNo?: number; planMeta?: JsonRecord | null; workflowStatus?: string | null }) {
-    const chapter = normalizeLocalChapter(payload)
+    const sortNo = payload.sortNo ?? nextSortNo((await this.listBookChapters(payload.bookId)).filter(item => String(item.volumeId) === String(payload.volumeId) && !item.deletedAt))
+    const chapter = normalizeLocalChapter({ ...payload, sortNo })
     await this.put(STORE_CHAPTERS, chapter)
     await this.refreshBookStats(payload.bookId)
     return chapter
@@ -446,11 +451,12 @@ export class IndexedDbLocalLibraryStorage implements LocalLibraryStorage {
     }
   }
 
-  async sortLocalChapters(payload: { volumeId: number | string; chapterIds: number[] }) {
+  async sortLocalChapters(payload: { volumeId: number | string; chapterIds: number[] }, options?: { keepTime?: boolean }) {
     for (const [index, id] of payload.chapterIds.entries()) {
       const chapter = await this.get<LocalChapter>(STORE_CHAPTERS, id)
-      if (chapter) await this.put(STORE_CHAPTERS, normalizeLocalChapter({ ...chapter, volumeId: payload.volumeId, sortNo: index + 1, updateTime: nowIso() }))
+      if (chapter) await this.put(STORE_CHAPTERS, normalizeLocalChapter({ ...chapter, volumeId: payload.volumeId, sortNo: index + 1, ...(options?.keepTime ? {} : { updateTime: nowIso() }) }))
     }
+    if (options?.keepTime) return
     const first = await this.get<LocalChapter>(STORE_CHAPTERS, payload.chapterIds[0])
     if (first) await this.refreshBookStats(first.bookId)
   }

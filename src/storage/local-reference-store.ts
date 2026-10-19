@@ -167,6 +167,21 @@ export const applyDefined = <T extends object>(target: T, patch: Record<string, 
   }
 }
 
+/** 表单基线检查：只提交作者实际改动的字段；后台修改过同一字段时保留表单并报冲突。 */
+export const applyCheckedFields = <T extends object>(target: T, patch: Record<string, unknown>, expected?: Partial<T>) => {
+  const changes: Record<string, unknown> = {}
+  const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null)
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === undefined) continue
+    const field = key as keyof T
+    if (expected && same(value, expected[field])) continue
+    if (expected && !same(target[field], expected[field]) && !same(target[field], value))
+      throw new Error('资料版本冲突：该字段已被其他操作修改，当前编辑内容已保留，请核对最新资料')
+    changes[key] = value
+  }
+  applyDefined(target, changes)
+}
+
 export const nextLocalId = () => createLocalEntityId()
 
 export const bySortNo = <T extends { sortNo?: number; id: number }>(list: T[]) =>

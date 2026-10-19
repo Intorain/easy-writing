@@ -15,6 +15,8 @@ import {
   type RankSeedSource,
 } from '@/config/rank-sources'
 import { crawlRankSource } from '@/utils/local-rank-crawler'
+import { RANK_AUTO_CRAWLED_EVENT, dispatchStorageEvent } from './writing-storage'
+import { abortable, throwIfAborted } from '@/utils/abortable'
 
 /**
  * 榜单本机库：快照存 IndexedDB，趋势靠每日快照日积月累。
@@ -110,14 +112,29 @@ const markLocalRankSourceViewed = async (sourceId: number) => {
 // ---------------------------------------------------------------------------
 
 export const listSourceSnapshotDates = async (sourceId: number): Promise<string[]> => {
-  const keys = await withStore<IDBValidKey[]>('readonly', store => store.getAllKeys())
   const prefix = `snap:${sourceId}:`
+  // 只按前缀取键：快照带简介、封面等字段，整库读取会随抓取次数线性变慢
+  const keys = await withStore<IDBValidKey[]>('readonly', store => store.getAllKeys(prefix))
   return keys
     .map(String)
     .filter(key => key.startsWith(prefix))
     .map(key => key.slice(prefix.length))
     .sort()
     .reverse()
+}
+
+/** 每个榜单源的最新快照日期：一次读全部键，供"各平台抓过没抓过"这类概况用，不必逐源查 */
+export const listNewestSnapshotDates = async (): Promise<Map<number, string>> => {
+  const keys = await withStore<IDBValidKey[]>('readonly', store => store.getAllKeys())
+  const newest = new Map<number, string>()
+  for (const key of keys.map(String)) {
+    const match = key.match(/^snap:(\d+):(\d{4}-\d{2}-\d{2})$/)
+    if (!match) continue
+    const sourceId = Number(match[1])
+    const current = newest.get(sourceId)
+    if (!current || match[2] > current) newest.set(sourceId, match[2])
+  }
+  return newest
 }
 
 export const readSnapshot = (sourceId: number, date: string) =>
@@ -143,16 +160,34 @@ export interface RankCrawlOutcome {
   crawled: boolean
   message: string
   snapshotDate: string | null
+  reason?: 'refreshed' | 'recent_cache' | 'disabled'
+  retryAfterMs?: number
 }
+
+const sourceQueues = new Map<number, Promise<RankCrawlOutcome>>()
 
 /** 抓取一个源并落快照；同日快照存在时手动重抓受 30 分钟频控保护 */
 export const crawlLocalRankSource = async (
   sourceId: number,
-  options: { manual?: boolean } = {}
+  options: { manual?: boolean; signal?: AbortSignal; onFetchStart?: () => void } = {}
 ): Promise<RankCrawlOutcome> => {
+  const previous = sourceQueues.get(sourceId)
+  const task = Promise.resolve(previous).catch(() => undefined).then(() => crawlAndSave(sourceId, options))
+  sourceQueues.set(sourceId, task)
+  void task.finally(() => {
+    if (sourceQueues.get(sourceId) === task) sourceQueues.delete(sourceId)
+  }).catch(() => undefined)
+  return abortable(task, options.signal)
+}
+
+const crawlAndSave = async (
+  sourceId: number,
+  options: { manual?: boolean; signal?: AbortSignal; onFetchStart?: () => void }
+): Promise<RankCrawlOutcome> => {
+  throwIfAborted(options.signal)
   const settings = await getLocalRankSettings()
   if (settings.mode === 'off') {
-    return { crawled: false, message: '榜单抓取已关闭，可在页面右上角开启', snapshotDate: null }
+    return { crawled: false, reason: 'disabled', message: '榜单抓取已关闭，可在页面右上角开启', snapshotDate: null }
   }
   const source = findRankSource(sourceId)
   if (!source || source.enabled !== 1) throw new Error('榜单源不存在或未启用')
@@ -166,22 +201,30 @@ export const crawlLocalRankSource = async (
         crawled: false,
         message: options.manual ? '半小时内已抓取过，展示当前数据' : '今日已抓取',
         snapshotDate: today,
+        reason: 'recent_cache',
+        retryAfterMs: Math.max(0, MANUAL_RECRAWL_MIN_MS - age),
       }
     }
   }
 
-  const result = await crawlRankSource(source as RankSeedSource)
+  throwIfAborted(options.signal)
+  options.onFetchStart?.()
+  const result = await crawlRankSource(source as RankSeedSource, options.signal)
+  throwIfAborted(options.signal)
+  if (!result.items.length) throw new Error('抓取没有返回榜单条目，已保留原有快照')
+  const capturedDate = localDate()
   const doc: LocalRankSnapshotDoc = {
     sourceId: Number(sourceId),
-    statDate: today,
+    statDate: capturedDate,
     fetchedAt: Date.now(),
     pageTitle: result.pageTitle,
     cutoffText: result.cutoffText,
     items: result.items,
   }
-  await writeValue(snapKey(sourceId, today), doc)
+  await writeValue(snapKey(sourceId, capturedDate), doc)
   await pruneSnapshots(sourceId)
-  return { crawled: true, message: `已抓取 ${result.items.length} 条`, snapshotDate: today }
+  window.dispatchEvent(new CustomEvent('ew-rank-updated', { detail: { sourceId, statDate: capturedDate } }))
+  return { crawled: true, reason: 'refreshed', message: `已抓取 ${result.items.length} 条`, snapshotDate: capturedDate }
 }
 
 /** 自动模式：每天补抓一次最近看过的榜单（应用打开期间触发，静默容错） */
@@ -210,10 +253,10 @@ export const maybeAutoCrawlLocalRank = async () => {
     }
     await new Promise(resolve => setTimeout(resolve, 1200 + Math.random() * 800))
   }
-  await saveLocalRankSettings({
-    lastAutoDate: today,
-    lastAutoSummary: `今日自动抓取 ${ok} 个榜单${failed ? `，失败 ${failed} 个` : ''}`,
-  })
+  const summary = `今日自动抓取 ${ok} 个榜单${failed ? `，失败 ${failed} 个` : ''}`
+  await saveLocalRankSettings({ lastAutoDate: today, lastAutoSummary: summary })
+  // 抓完广播一声：微信助手据此主动通知作者，榜单页本身不依赖这个事件
+  dispatchStorageEvent(RANK_AUTO_CRAWLED_EVENT, { date: today, ok, failed, summary })
 }
 
 // ---------------------------------------------------------------------------

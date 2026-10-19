@@ -153,7 +153,7 @@ export const useThemeStore = defineStore('theme', () => {
   // 当前皮肤对象
   const currentSkinObj = ref<Skin>(DEFAULT_SKIN)
 
-  // 初始化：从 localStorage 加载主题和皮肤
+  // 从统一设置入口恢复主题；桌面端由启动迁移先准备 SQLite 设置缓存。
   const initTheme = () => {
     // 加载主题
     const savedTheme = appSettings.getItem(STORAGE_KEY)
@@ -263,6 +263,13 @@ export const useThemeStore = defineStore('theme', () => {
     // （历史版本曾把四个颜色内联写在根元素上，会压过主题类定义，已移除。）
     document.documentElement.style.setProperty('--theme-bg-filter', config.filter)
     document.documentElement.style.setProperty('--theme-bg-opacity', config.opacity.toString())
+
+    // 给 index.html 的启动页留个底色记号：下次启动在脚本加载前就按当前主题画，不闪一块别的颜色
+    try {
+      localStorage.setItem('ew-boot-theme', config.value)
+    } catch {
+      /* 记号只是启动期的便利，写不进就按默认主题 */
+    }
   }
 
   // 应用皮肤（背景图通过 Vue 响应式绑定自动更新，无需手动操作）

@@ -35,6 +35,11 @@
           <i v-else class="fa-solid fa-book-open-reader"></i>
           {{ bookReport ? '查看全书报告' : '生成全书报告' }}
         </button>
+        <button v-if="desktop" class="ink-btn ink-btn-outline" type="button" @click="agentResultsVisible = true">拆书章节卡与报告</button>
+        <button v-if="desktop" class="ink-btn ink-btn-outline" type="button" @click="pacingVisible = true">
+          <i class="fa-solid fa-chart-column"></i>
+          节奏与对比
+        </button>
         <!-- 开源版：PDF/Word 依赖服务端排版，导出改为 Markdown 客户端生成 -->
         <button class="ink-btn ink-btn-outline" type="button" @click="handleExport">
           <i class="fa-solid fa-download"></i>
@@ -48,6 +53,11 @@
       </div>
     </header>
 
+    <p v-if="projectDetail?.agentIndexedChapters" class="agent-results-notice">
+      已保存 {{ projectDetail.agentIndexedChapters }}/{{ totalCount }} 章的 Agent 章节卡。
+      <button class="ink-btn ink-btn-outline" @click="agentResultsVisible = true">查看拆书结果</button>
+      下方为逐段深拆工作台，使用独立的分析结果。
+    </p>
     <!-- 初次加载：骨架/加载态，避免停留在空白工作台 -->
     <section v-if="initialLoading" class="workbench-state">
       <div class="state-icon loading">
@@ -339,6 +349,9 @@
         </template>
       </div>
     </el-drawer>
+    <!-- 拆书 2.0：参考书按章节卡统计节奏，与自己的作品对比 -->
+    <BreakdownResultsModal :visible="agentResultsVisible" :project-id="String(projectId)" @update:visible="agentResultsVisible = $event" />
+    <BreakdownPacingDrawer v-if="desktop" v-model:visible="pacingVisible" :project-id="projectId" :book-title="bookTitle" />
   </div>
 </template>
 
@@ -368,11 +381,17 @@ import {
 } from '@/utils/local-breakdown-engine'
 import { saveBlobFile } from '@/utils/download'
 import { showApiError } from '@/utils/api-error'
+import { isTauriRuntime } from '@/storage'
+import BreakdownPacingDrawer from './BreakdownPacingDrawer.vue'
+import BreakdownResultsModal from '@/components/BreakdownResultsModal.vue'
 
 const route = useRoute()
 const router = useRouter()
 
 const projectId = computed(() => Number(route.query.projectId || 0))
+const desktop = isTauriRuntime()
+const pacingVisible = ref(false)
+const agentResultsVisible = ref(false)
 
 const projectDetail = ref<BreakdownProjectDetail | null>(null)
 const chapterList = ref<BreakdownChapterItem[]>([])

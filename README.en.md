@@ -142,6 +142,10 @@ For the following services or other partnership ideas, contact me by email or We
 
 <img src="./docs/images/wechat-contact.png" alt="yilujian WeChat QR code" width="260">
 
+**WeChat group**: the Easy Writing feedback group, for questions and suggestions. The group QR code changes weekly; if it has expired, add the WeChat above and ask to be invited.
+
+<img src="./docs/images/wechat-group.png" alt="Easy Writing feedback group QR code" width="260">
+
 ## License
 
 [AGPL-3.0](./LICENSE) — free to use, modify and redistribute; modified versions (including network-hosted services built on it) must be open-sourced under the same license.

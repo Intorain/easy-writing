@@ -607,8 +607,8 @@ import {
   getLocalRankHomePreference as getNovelRankHomePreferenceApi,
   saveLocalRankHomePreference as saveNovelRankHomePreferenceApi,
   cancelLocalRankHomePreference as cancelNovelRankHomePreferenceApi,
-  crawlLocalRankSource,
   maybeAutoCrawlLocalRank,
+  crawlLocalRankSource,
   getLocalRankSettings,
   saveLocalRankSettings,
   type RankCrawlMode,
@@ -2192,7 +2192,30 @@ watch(analysisDays, async () => {
   }
 })
 
+// Agent 等其他入口抓到新快照时，页面正在看的是同一范围的最新数据就跟着刷新；
+// 页面自己抓取时由 handleCrawlNow 负责刷新。范围采集会连续到达多个快照，合并成一次刷新。
+let rankUpdateTimer: number | undefined
+const handleRankUpdated = (event: Event) => {
+  const detail = (event as CustomEvent<{ sourceId: number; statDate: string }>).detail
+  if (!detail || crawling.value) return
+  if (dateTouched.value && statDate.value !== detail.statDate) return
+  const sourceId = Number(detail.sourceId)
+  const visible =
+    selectedSourceId.value === 0
+      ? sourcesAll.value.some(
+          s => Number(s.id) === sourceId && String(s.rankType || '') === String(rankType.value || '')
+        )
+      : Number(selectedSourceId.value) === sourceId
+  if (!visible) return
+  window.clearTimeout(rankUpdateTimer)
+  rankUpdateTimer = window.setTimeout(async () => {
+    await loadLatest()
+    if (analysisVisible.value) await refreshAnalysis()
+  }, 1500)
+}
+
 onMounted(async () => {
+  window.addEventListener('ew-rank-updated', handleRankUpdated)
   applyRouteFilter()
   void loadCrawlSettings()
   // 自动模式：每天补抓一次最近看过的榜单（静默容错，不阻塞页面）
@@ -2213,6 +2236,8 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   rankPageActive = false
   crawlStopRequested = true
+  window.removeEventListener('ew-rank-updated', handleRankUpdated)
+  window.clearTimeout(rankUpdateTimer)
   analysisResizeObserver?.disconnect()
   analysisThemeObserver?.disconnect()
   categoryChart?.dispose()

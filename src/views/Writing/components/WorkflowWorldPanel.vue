@@ -382,7 +382,7 @@ const saveSetting = async () => {
     }
     const { data } = wasCreating
       ? await addWorldSettingApi({ bookId: String(props.bookId), ...payload })
-      : await updateWorldSettingApi({ id: selectedSettingId.value!, ...payload })
+      : await updateWorldSettingApi({ id: selectedSettingId.value!, ...payload }, selectedSetting.value || undefined)
     await loadWorldSettings(data.id)
     emit('lore-updated')
     ElMessage.success(wasCreating ? '设定已新增' : '设定已保存')

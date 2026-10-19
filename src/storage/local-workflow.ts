@@ -1,4 +1,5 @@
-import { withRecordStore } from './desktop-records'
+import { withRecordStore, writeDesktopRecords, encodeRecords } from './desktop-records'
+import { isTauriRuntime } from './writing-storage'
 import type { JsonRecord } from '@/types/json'
 import type {
   WorkflowArtifact,
@@ -167,6 +168,24 @@ export const deleteLocalWorkflow = async (data: { id: number }) => {
 
 export const writeLocalWorkflowTask = async (task: WorkflowStepTask | WorkflowTask) => {
   await writeValue(taskKey(task.id), task)
+}
+
+/** 终态与 run 的活动任务引用一次提交，轮询不能读到只完成一半的状态。 */
+export const settleLocalWorkflowTask = async (task: WorkflowTask) => {
+  const records: Array<{ key: string; value: unknown }> = [{ key: taskKey(task.id), value: task }]
+  const run = await readLocalWorkflowRun(Number(task.runId))
+  if (run && ['succeeded', 'canceled', 'failed'].includes(String(task.status)) && Number(run.activeTaskId) === Number(task.id)) {
+    run.activeTaskId = null
+    if (task.status === 'succeeded') run.status = 'completed'
+    if (task.status === 'canceled') run.status = 'canceled'
+    records.push({ key: runKey(run.id), value: run })
+  }
+  if (isTauriRuntime()) {
+    const namespace = `${DB_NAME}/${STORE_NAME}`
+    await writeDesktopRecords(namespace, await encodeRecords(namespace, records))
+  } else {
+    await withStore('readwrite', store => Promise.all(records.map(record => store.put(JSON.parse(JSON.stringify(record.value)), record.key))))
+  }
 }
 
 /**

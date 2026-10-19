@@ -54,17 +54,27 @@ export const findLiveLocalTaskForRun = (runId: number, kinds?: Array<LiveLocalTa
 
 type LocalWorkflowEventHandler = (event: WorkflowRealtimeEvent) => void
 
-const eventHandlers = new Set<{ runId: number; handler: LocalWorkflowEventHandler }>()
+/** runId 为 null 表示订阅所有 run 的事件（微信通知这类跨任务的观察者用） */
+const eventHandlers = new Set<{ runId: number | null; handler: LocalWorkflowEventHandler }>()
 
 export const emitLocalWorkflowEvent = (event: WorkflowRealtimeEvent) => {
   for (const entry of eventHandlers) {
-    if (Number(entry.runId) !== Number(event.runId)) continue
+    if (entry.runId !== null && Number(entry.runId) !== Number(event.runId)) continue
     try {
       entry.handler(event)
     } catch (error) {
       // 单个订阅方抛错不能打断生成循环，也不能影响其他订阅方
       console.error('工作流事件处理失败:', error)
     }
+  }
+}
+
+/** 订阅全部 run 的生成事件（不区分任务）；返回退订函数 */
+export const subscribeAllLocalWorkflowEvents = (handler: LocalWorkflowEventHandler) => {
+  const entry = { runId: null, handler }
+  eventHandlers.add(entry)
+  return () => {
+    eventHandlers.delete(entry)
   }
 }
 

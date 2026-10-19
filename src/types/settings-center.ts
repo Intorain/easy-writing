@@ -8,6 +8,7 @@ export type SettingsSectionId =
   | 'sync'
   | 'sensitive'
   | 'record'
+  | 'weixin'
   | 'cache'
 
 export interface SettingsNavItem {

@@ -85,6 +85,7 @@ export interface Character {
   bookId: string;
   groupId?: string | number | null;
   name: string;
+  /** 别名：正文里的其他称呼，供记忆索引解析人物 */
   aliases?: string[];
   role: number; // 0-主角 1-主要配角 2-反派 3-路人
   gender: number; // 0-女 1-男 2-其他
@@ -95,6 +96,8 @@ export interface Character {
   personality?: string;
   background?: string;
   ability?: string;
+  /** 语言指纹：口头禅、语气、句长偏好、禁用词、代表台词 */
+  voice?: string;
   /** 人物关系 JSON：存储层当不透明数据透传，无结构约定 */
   relationships?: unknown;
   sortNo?: number;

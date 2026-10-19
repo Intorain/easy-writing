@@ -16,6 +16,7 @@ export const navigationGroups: Array<{ title: string; items: NavigationItem[] }>
     items: [
       { id: 'home', label: '首页', icon: 'fa-solid fa-house', path: '/novel' },
       { id: 'books', label: '我的作品', icon: 'fa-solid fa-book', path: '/myBooks' },
+      { id: 'agentCreation', label: 'Agent 创作', icon: 'fa-regular fa-comments', path: '/agent-creation' },
       {
         id: 'workflowBook',
         label: '工作流建书',

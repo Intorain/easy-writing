@@ -158,7 +158,8 @@ export const writeDesktopRecords = (
 interface RecordActions {
   get(key: IDBValidKey): Promise<unknown>
   getAll(): Promise<unknown[]>
-  getAllKeys(): Promise<IDBValidKey[]>
+  /** 只列键不读值；传前缀时在库里过滤，榜单快照这类大记录按日期枚举不必读整库 */
+  getAllKeys(prefix?: string): Promise<IDBValidKey[]>
   put(value: unknown, key?: IDBValidKey): Promise<IDBValidKey>
   delete(key: IDBValidKey): Promise<void>
 }
@@ -190,7 +191,7 @@ async function runRecordStore<T>(
         return raw == null ? undefined : decode(raw)
       },
       getAll: async () => Promise.all((await readDesktopRecords(namespace)).map(record => decode(record.value))),
-      getAllKeys: async () => (await readDesktopRecords(namespace)).map(record => record.key),
+      getAllKeys: prefix => desktopInvoke<IDBValidKey[]>('desktop_store_keys', { namespace, prefix }),
       put: async (value, key) => {
         const actual = keyOf(keyPath ? (value as Record<string, IDBValidKey>)[keyPath] : key)
         await writeDesktopRecords(namespace, await encodeRecords(namespace, [{ key: actual, value }]))
@@ -227,7 +228,10 @@ async function runRecordStore<T>(
     const value = await run({
       get: key => request(store.get(key)),
       getAll: () => request(store.getAll()),
-      getAllKeys: () => request(store.getAllKeys()),
+      getAllKeys: async prefix => {
+        const keys = await request(store.getAllKeys())
+        return prefix ? keys.filter(key => String(key).startsWith(prefix)) : keys
+      },
       put: (value, key) => request(keyPath ? store.put(value) : store.put(value, key)),
       delete: key => request(store.delete(key))
     })

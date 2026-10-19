@@ -33,6 +33,30 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '我的作品' }
       },
       {
+        path: '/agent-creation',
+        name: 'AgentCreation',
+        component: () => import('@/views/AgentCreation/index.vue'),
+        meta: { title: 'Agent 创作', hideLayout: true, agentView: 'chat' }
+      },
+      {
+        path: '/agent-creation/memory',
+        name: 'AgentCreationMemory',
+        component: () => import('@/views/AgentCreation/index.vue'),
+        meta: { title: 'Agent 记忆', hideLayout: true, agentView: 'memory' }
+      },
+      {
+        path: '/agent-creation/skills',
+        name: 'AgentCreationSkills',
+        component: () => import('@/views/AgentCreation/index.vue'),
+        meta: { title: 'Agent Skills', hideLayout: true, agentView: 'skills' }
+      },
+      {
+        path: '/agent-creation/automation',
+        name: 'AgentCreationAutomation',
+        component: () => import('@/views/AgentCreation/index.vue'),
+        meta: { title: 'Agent 自动任务', hideLayout: true, agentView: 'automation' }
+      },
+      {
         path: '/feedback',
         name: 'Feedback',
         component: () => import('@/views/Feedback/index.vue'),

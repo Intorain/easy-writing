@@ -3,6 +3,7 @@ export type WordCountMode = 'all' | 'text'
 export type MenuId =
   | 'home'
   | 'books'
+  | 'agentCreation'
   | 'workflowBook'
   | 'writeStatistics'
   | 'novelRank'

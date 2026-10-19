@@ -25,8 +25,11 @@ import { initLocalPrompts } from '@/storage/local-prompts'
 import { initImportedFonts, loadImportedFont } from '@/composables/use-imported-fonts'
 import { useWritingEditorStore } from '@/stores/writing-editor'
 import { installOverflowProbe } from './startup/overflow-probe'
+import { isTauriRuntime } from '@/storage/writing-storage'
 
-// 清掉旧 SaaS 版本残留的账号持久化，防止陈旧登录态误触云端分支
+// main.ts 在桌面迁移、设置加载完成后才动态导入此文件；
+// Pinia、主题和 Agent 页面因此共用已就绪的设置缓存，不再直接访问旧 localStorage。
+// 清掉旧 SaaS 版本残留的账号持久化，防止陈旧登录态误触云端分支。
 appSettings.removeItem('ew-user')
 
 window.addEventListener('ew-settings-save-failed', event => {
@@ -39,7 +42,46 @@ pinia.use(piniaPluginPersistedstate)
 
 app.use(pinia)
 app.use(router)
-// 开发态：页面横向溢出时在控制台报页面与超出像素，生产构建不含
+/** index.html 里的启动占位（两根墨条）在首屏挂载后淡出；迁移页出现时由迁移页自己移除 */
+const dismissBootScreen = () => {
+  const boot = document.getElementById('ew-boot')
+  if (!boot) return
+  boot.classList.add('is-done')
+  window.setTimeout(() => boot.remove(), 300)
+}
+
+// 后台任务可以在 Agent 页面关闭时修改章节；应用级桥接通知原编辑器重新核对版本。
+let webviewExecutorReady = Promise.resolve()
+if (isTauriRuntime()) {
+  webviewExecutorReady = import('@tauri-apps/api/window')
+    .then(async ({ getCurrentWindow }) => {
+      if (getCurrentWindow().label !== 'main') return
+      const { installWebviewExecutor } = await import('@/agent/webview-executor')
+      const dispose = await installWebviewExecutor()
+      import.meta.hot?.dispose(dispose)
+    })
+    .catch(error => console.error('启动网页桥执行器失败', error))
+  void import('@tauri-apps/api/event')
+    .then(({ listen }) =>
+      listen<{ bookId: string; chapterId: string; version?: number }>('agent-book-changed', event => {
+        window.dispatchEvent(
+          new CustomEvent('ew-writing-chapter-content-refresh', {
+            detail: {
+              bookId: event.payload.bookId,
+              chapterId: Number(event.payload.chapterId),
+              source: 'agent',
+              contentVersion: event.payload.version
+            }
+          })
+        )
+        window.dispatchEvent(
+          new CustomEvent('ew-local-book-updated', { detail: { bookId: event.payload.bookId } })
+        )
+      })
+    )
+    .catch(error => console.error('连接 Agent 作品通知失败', error))
+}
+// 开发态记录横向溢出，不参与生产环境运行。
 if (import.meta.env.DEV) installOverflowProbe(router)
 
 app.use(InkLoading)
@@ -51,9 +93,12 @@ app.use(ElLoading)
 const themeStore = useThemeStore()
 themeStore.initTheme()
 
-// 提示词库先于挂载装载：AI 组装器同步读取，必须在任何界面可交互前就绪
+// 提示词库先于挂载装载：AI 组装器同步读取，必须在任何界面可交互前就绪。
+// 网页桥执行器只服务 Agent 的后台请求（榜单抓取、发文件发图、灵感与统计），不挡首屏：挂载后再等它装好。
 void initLocalPrompts().finally(() => {
   app.mount('#app')
+  dismissBootScreen()
+  void webviewExecutorReady
   const storageNotice = takeStorageStartupNotice()
   if (storageNotice) ElMessage.warning({ message: storageNotice, duration: 8000 })
   // 字体是可选资源，恢复本地字体不能阻塞整个应用启动。

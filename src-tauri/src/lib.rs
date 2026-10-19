@@ -11,12 +11,160 @@ use tauri::menu::{
 use tauri::webview::{NewWindowFeatures, NewWindowResponse};
 use tauri::{Manager, Url, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
-mod window_state;
+mod agent_batch;
+#[cfg(all(test, feature = "local-tests"))]
+mod agent_batch_tests;
+mod agent_book_plan;
+mod agent_book_adoption;
+#[cfg(all(test, feature = "local-tests"))]
+mod agent_book_adoption_tests;
+mod agent_breakdown;
+mod agent_breakdown_job;
+mod agent_distillation;
+#[cfg(all(test, feature = "local-tests"))]
+mod agent_distillation_tests;
+mod agent_reference_import;
+#[cfg(all(test, feature = "local-tests"))]
+mod agent_breakdown_tests;
+mod agent_canon;
+#[cfg(all(test, feature = "local-tests"))]
+mod agent_canon_tests;
+mod agent_context;
+mod agent_task;
+#[cfg(all(test, feature = "local-tests"))]
+mod agent_task_tests;
+#[cfg(all(test, feature = "local-tests"))]
+mod agent_context_tests;
+mod agent_contract;
+mod agent_tool_boundary;
+#[cfg(all(test, feature = "local-tests"))]
+mod agent_tool_boundary_tests;
+#[cfg(all(test, feature = "local-tests"))]
+mod agent_contract_tests;
+mod agent_creation;
+mod agent_digest;
+#[cfg(all(test, feature = "local-tests"))]
+mod agent_digest_tests;
+mod agent_eval;
+#[cfg(all(test, feature = "local-tests"))]
+mod agent_eval_tests;
+mod agent_feedback;
+#[cfg(all(test, feature = "local-tests"))]
+mod agent_feedback_tests;
+#[cfg(all(test, feature = "local-tests"))]
+mod agent_creation_tests;
+mod agent_host;
+mod agent_indexer;
+#[cfg(all(test, feature = "local-tests"))]
+mod agent_indexer_tests;
+mod agent_journal;
+#[cfg(all(test, feature = "local-tests"))]
+mod agent_journal_tests;
+mod agent_memory;
+#[cfg(all(test, feature = "local-tests"))]
+mod agent_memory_tests;
+mod agent_method_pack;
+#[cfg(all(test, feature = "local-tests"))]
+mod agent_method_pack_tests;
+mod agent_packaging;
+#[cfg(all(test, feature = "local-tests"))]
+mod agent_packaging_tests;
+mod agent_prompt;
+#[cfg(all(test, feature = "local-tests"))]
+mod agent_prompt_tests;
+mod agent_quality;
+mod agent_delivery;
+mod agent_artifacts;
+#[cfg(all(test, feature = "local-tests"))]
+mod agent_delivery_tests;
+mod agent_rank;
+mod agent_approval;
+mod agent_library;
+mod agent_rank_bridge;
+mod agent_webview_bridge;
+#[cfg(all(test, feature = "local-tests"))]
+mod agent_rank_tests;
+#[cfg(all(test, feature = "local-tests"))]
+mod agent_quality_tests;
+#[cfg(all(test, feature = "local-tests"))]
+mod agent_reference_tests;
+mod agent_ruleset;
+#[cfg(all(test, feature = "local-tests"))]
+mod agent_ruleset_tests;
+mod agent_service;
+#[cfg(all(test, feature = "local-tests"))]
+mod agent_short_tests;
+mod agent_skill_files;
+mod agent_skill_authoring;
+#[cfg(all(test, feature = "local-tests"))]
+mod agent_skill_authoring_tests;
+#[cfg(all(test, feature = "local-tests"))]
+mod agent_skill_files_tests;
+mod agent_skill_runner;
+mod agent_skill_lifecycle;
+#[cfg(all(test, feature = "local-tests"))]
+mod agent_skill_lifecycle_tests;
+#[cfg(all(test, feature = "local-tests"))]
+mod agent_skill_runner_tests;
+mod agent_skills;
+#[cfg(all(test, feature = "local-tests"))]
+mod agent_skills_tests;
+mod agent_store;
+mod agent_submission;
+mod agent_style;
+mod agent_style_profile;
+mod agent_writing_basis;
+#[cfg(all(test, feature = "local-tests"))]
+mod agent_prose_tests;
+#[cfg(all(test, feature = "local-tests"))]
+mod agent_style_tests;
+#[cfg(all(test, feature = "local-tests"))]
+mod agent_tests;
+#[cfg(all(test, feature = "local-tests"))]
+mod agent_writing_tests;
 mod backup_restore;
-mod full_backup;
 mod desktop_storage;
+mod full_backup;
+mod prompt_files;
+#[cfg(all(test, feature = "local-tests"))]
+mod prompt_files_tests;
 mod storage_migration;
+mod startup_recovery;
+#[cfg(all(test, feature = "local-tests"))]
+mod startup_recovery_tests;
+mod window_state;
+mod agent_story;
+mod agent_channel;
+#[cfg(all(test, feature = "local-tests"))]
+mod agent_channel_tests;
+#[cfg(all(test, feature = "local-tests"))]
+mod agent_approval_tests;
+#[cfg(all(test, feature = "local-tests"))]
+mod agent_library_tests;
+#[cfg(all(test, feature = "local-tests"))]
+mod agent_story_tests;
+mod model_gateway;
+mod model_gateway_providers;
+mod agent_events;
+#[cfg(all(test, feature = "local-tests"))]
+mod agent_events_tests;
+mod agent_delivery_queue;
+mod blocking;
+mod agent_heartbeat;
+mod agent_scheduler;
+mod agent_vectors;
+#[cfg(all(test, feature = "local-tests"))]
+mod agent_vectors_tests;
+#[cfg(all(test, feature = "local-tests"))]
+mod agent_scheduler_tests;
+mod agent_worker_pool;
+#[cfg(all(test, feature = "local-tests"))]
+mod agent_worker_pool_tests;
+#[cfg(all(test, feature = "local-tests"))]
+mod model_gateway_tests;
+mod ai_trace;
 mod qimao_rank_http;
+mod weixin_bot;
 
 const MAIN_WINDOW_LABEL: &str = "main";
 /// 主窗口关闭兜底超时：前端 onCloseRequested 正常会自行 destroy；
@@ -628,10 +776,20 @@ fn list_prompt_documents() -> Result<Vec<PromptDocument>, String> {
 fn ensure_prompt_document(file_name: String, content: String) -> Result<bool, String> {
     use std::io::Write;
     let safe_name = sanitize_segment(&file_name, "提示词");
-    if !safe_name.to_ascii_lowercase().ends_with(".md") { return Err("提示词文件必须是 .md".to_string()); }
+    if !safe_name.to_ascii_lowercase().ends_with(".md") {
+        return Err("提示词文件必须是 .md".to_string());
+    }
     let path = ensure_prompt_dir()?.join(safe_name);
-    match std::fs::OpenOptions::new().write(true).create_new(true).open(path) {
-        Ok(mut file) => { file.write_all(content.as_bytes()).map_err(|error| error.to_string())?; Ok(true) },
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+    {
+        Ok(mut file) => {
+            file.write_all(content.as_bytes())
+                .map_err(|error| error.to_string())?;
+            Ok(true)
+        }
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
         Err(error) => Err(error.to_string()),
     }
@@ -769,10 +927,7 @@ async fn rank_crawl_render_page(
     if parsed.scheme() != "https" {
         return Err("榜单抓取仅支持 https 地址".to_string());
     }
-    let host = parsed
-        .host_str()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
+    let host = parsed.host_str().unwrap_or_default().to_ascii_lowercase();
     if !RANK_CRAWL_ALLOWED_HOSTS.contains(&host.as_str()) {
         return Err(format!("不支持抓取的站点：{host}"));
     }
@@ -1050,6 +1205,8 @@ fn schedule_main_window_close_fallback(window: &tauri::Window) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
+        .manage(agent_host::AgentHost::default())
+        .manage(agent_webview_bridge::WebviewExecutor::default())
         // 必须最先注册：第二个实例要在做任何初始化（尤其是打开 SQLite）之前就退出。
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
@@ -1065,6 +1222,17 @@ pub fn run() {
         .plugin(window_state::plugin())
         .setup(|app| {
             build_main_window(app.handle())?;
+            // 模型网关随应用起：worker 与后台任务的模型请求都从这里出去，Key 不离开宿主
+            if let Ok(root) = desktop_storage::root(app.handle()) {
+                if let Err(error) = model_gateway::endpoint(&root) {
+                    eprintln!("[model-gateway] 启动失败：{error}");
+                }
+            }
+            // 启动后稍等再索引：先让迁移与首屏加载完成；没有变更事件或没有模型时索引器直接退出。
+            agent_host::schedule_index(app.handle().clone(), std::time::Duration::from_secs(30));
+            agent_host::start_index_watch(app.handle().clone());
+            // 调度器随应用起：到点的自动任务、助理巡检、事件规则与投递队列都在宿主后台跑，不依赖窗口
+            agent_scheduler::start(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -1074,9 +1242,15 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            agent_host::agent_workspace,
+            agent_webview_bridge::webview_executor_ready,
+            agent_webview_bridge::webview_executor_complete,
+            agent_webview_bridge::webview_executor_progress,
             storage_migration::desktop_storage_session,
             storage_migration::desktop_storage_activate,
             storage_migration::desktop_storage_inspect,
+            startup_recovery::desktop_startup_recovery,
+            startup_recovery::desktop_storage_ready,
             storage_migration::desktop_storage_finalize,
             storage_migration::desktop_migration_prepare,
             storage_migration::desktop_migration_stage,
@@ -1089,6 +1263,7 @@ pub fn run() {
             desktop_storage::desktop_restore_apply,
             desktop_storage::desktop_store_read,
             desktop_storage::desktop_store_get,
+            desktop_storage::desktop_store_keys,
             desktop_storage::desktop_store_write,
             desktop_storage::desktop_store_compare_write,
             desktop_storage::desktop_asset_write,
@@ -1122,6 +1297,18 @@ pub fn run() {
             ensure_prompt_document,
             write_prompt_document,
             open_prompt_dir,
+            weixin_bot::weixin_bot_status,
+            weixin_bot::weixin_bot_start,
+            weixin_bot::weixin_bot_attach,
+            weixin_bot::weixin_bot_ack,
+            weixin_bot::weixin_bot_logout,
+            weixin_bot::weixin_bot_login_start,
+            weixin_bot::weixin_bot_login_poll,
+            weixin_bot::weixin_bot_login_cancel,
+            weixin_bot::weixin_bot_send_text,
+            weixin_bot::weixin_bot_send_typing,
+            weixin_bot::weixin_bot_push_text,
+            weixin_bot::weixin_bot_send_media,
         ]);
 
     #[cfg(target_os = "macos")]
@@ -1133,12 +1320,27 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                app.state::<agent_host::AgentHost>().stop_all();
+            }
+            #[cfg(target_os = "macos")]
+            if matches!(event, tauri::RunEvent::Reopen { .. }) {
+                if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
             // Menu Quit/Cmd-Q must use the same flush-and-close path as the close button.
             // Once the frontend destroys the main window, allow the resulting exit event.
             if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
-                if code == Some(tauri::RESTART_EXIT_CODE) { return; }
+                if code == Some(tauri::RESTART_EXIT_CODE) {
+                    return;
+                }
                 if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
                     api.prevent_exit();
+                    app.state::<agent_host::AgentHost>()
+                        .quitting
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
                     let _ = window.close();
                 }
             }

@@ -21,7 +21,7 @@ class="writing-right-panel border-gradient-l"
           @popout="handlePanelPopout(activeReferenceToolId)"
           @lore-updated="handleLoreUpdated"
         />
-        <AiChatPanel
+        <MiaobiPanel
 v-else-if="activeToolId === 'magic'" key="magic" :title="currentPanel.title" :book-id="bookId"
           @close="closePanel" />
         <InspirationPanel
@@ -102,7 +102,7 @@ import {
   WRITING_RIGHT_PANEL_MAX_WIDTH,
   WRITING_RIGHT_PANEL_MIN_WIDTH
 } from '@/stores/writing-editor'
-import AiChatPanel from './AiChatPanel.vue'
+import MiaobiPanel from './MiaobiPanel.vue'
 import InspirationPanel from './InspirationPanel.vue'
 import MobilePreviewPanel from './MobilePreviewPanel.vue'
 import WritingReferencePanelHost from './WritingReferencePanelHost.vue'

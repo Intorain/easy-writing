@@ -57,12 +57,8 @@ const aiModelStore = useAiModelStore()
 
 const models = computed<AiModelOption[]>(() => aiModelStore.groups[props.groupCode]?.models || [])
 
-// 用户在「AI 模型」页配置的全局默认；未配置时回落平台策略默认
-const userDefaultCode = computed(() => {
-  if (props.groupCode === 'text_assist') return aiModelStore.textModel
-  if (props.groupCode === 'workflow_book') return aiModelStore.workflowModel
-  return aiModelStore.imageModel
-})
+// 「AI 模型」页里该分组实际生效的模型：用户选的，或没选时的自动/跟随结果（工作流没选就是空）
+const userDefaultCode = computed(() => aiModelStore.effectiveModelCode(props.groupCode))
 
 const defaultModel = computed<AiModelOption | null>(() => {
   const code = userDefaultCode.value
@@ -80,7 +76,7 @@ const getOptionTitle = (model: AiModelOption) => {
 
 const defaultName = computed(() => {
   const model = defaultModel.value
-  return model ? getOptionTitle(model) : '智能推荐'
+  return model ? getOptionTitle(model) : '未设置'
 })
 
 const followLabel = computed(() => `跟随默认 · ${defaultName.value}`)

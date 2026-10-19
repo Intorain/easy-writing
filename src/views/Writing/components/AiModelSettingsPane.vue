@@ -2,332 +2,86 @@
   <section class="ai-model-settings" :class="{ 'page-mode': mode === 'page' }">
     <div v-if="showHead" class="pane-head">
       <h3>AI模型</h3>
-      <p>配置自己的供应商模型，并为写作、生图和工作流选择默认模型。</p>
+      <p>接入自己的供应商模型，并为各功能选择默认模型。API Key 只保存在本机。</p>
     </div>
 
-    <div class="provider-grid">
-      <button
-        v-for="preset in providerPresets"
-        :key="preset.provider"
-        type="button"
-        class="provider-card"
-        :class="{ active: form.provider === preset.provider }"
-        :aria-pressed="form.provider === preset.provider"
-        @click="applyProvider(preset)"
-      >
-        <span class="provider-icon" :class="{ 'is-custom': !preset.iconSrc }">
-          <img v-if="preset.iconSrc" :src="preset.iconSrc" :alt="`${preset.label} logo`" loading="lazy" />
-          <i v-else class="fa-solid fa-plus"></i>
-        </span>
-        <span class="provider-info">
-          <strong>{{ preset.label }}</strong>
-          <small>{{ preset.description }}</small>
-        </span>
-        <span v-if="form.provider === preset.provider" class="provider-check" aria-hidden="true">
-          <i class="fa-solid fa-check"></i>
-        </span>
-      </button>
-    </div>
-
-    <div class="model-grid">
-      <section class="model-card model-form-card">
-        <div class="card-head">
-          <div>
-            <h4>{{ editingId ? '编辑模型' : '添加模型' }}</h4>
-            <p>当前支持 OpenAI 兼容协议。</p>
-          </div>
-          <button v-if="editingId" class="ink-btn ink-btn-outline compact-btn" type="button" @click="resetForm">
-            取消编辑，改为新增
-          </button>
-        </div>
-
-        <div class="form-grid">
-          <label class="field">
-            <span>使用场景</span>
-            <el-select v-model="form.scene" size="small" popper-class="ai-model-select-popper">
-              <el-option label="文字生成" value="text" />
-              <el-option label="图像生成" value="image" />
-            </el-select>
-          </label>
-          <label class="field">
-            <span>服务商</span>
-            <el-select v-model="form.provider" size="small" popper-class="ai-model-select-popper">
-              <el-option
-                v-for="preset in providerPresets"
-                :key="preset.provider"
-                :label="preset.label"
-                :value="preset.provider"
-              />
-            </el-select>
-          </label>
-          <label class="field">
-            <span>模型名称</span>
-            <el-input v-model="form.name" size="small" maxlength="80" placeholder="我的 DeepSeek" />
-          </label>
-          <label ref="modelCodeFieldRef" class="field model-code-field">
-            <span>模型代码</span>
-            <div class="model-code-control">
-              <el-input
-                v-model="form.modelCode"
-                size="small"
-                maxlength="120"
-                placeholder="deepseek-chat"
-                @focus="showRemoteModelPanel"
-                @input="remoteModelPanelVisible = false"
-              />
-              <button
-                class="fetch-model-btn"
-                type="button"
-                :disabled="remoteModelLoading"
-                @click.prevent="fetchRemoteModels"
-              >
-                <i v-if="remoteModelLoading" class="fa-solid fa-spinner fa-spin"></i>
-                <i v-else class="fa-solid fa-cloud-arrow-down"></i>
-                拉取
-              </button>
-            </div>
-            <div v-if="remoteModelPanelVisible" class="remote-model-panel">
-              <button
-                v-for="code in remoteModels"
-                :key="code"
-                type="button"
-                :class="{ active: form.modelCode === code }"
-                @click.prevent="selectRemoteModel(code)"
-              >
-                {{ code }}
-              </button>
-            </div>
-          </label>
-          <label class="field wide">
-            <span>Base URL</span>
-            <el-input v-model="form.baseUrl" size="small" maxlength="500" placeholder="https://api.example.com/v1" />
-          </label>
-          <label class="field">
-            <span>API Key<small class="key-local-hint">（只保存在本机；Ollama 等本地部署可留空）</small></span>
-            <el-input
-              v-model="form.apiKey"
-              size="small"
-              type="password"
-              show-password
-              :placeholder="editingId ? '留空则不修改' : '请输入 API Key'"
-            />
-          </label>
-          <label class="field">
-            <span>最大上下文</span>
-            <el-input-number
-              v-model="form.maxContext"
-              size="small"
-              :min="1024"
-              :max="1000000"
-              :step="1024"
-              controls-position="right"
-            />
-          </label>
-          <label class="field">
-            <span>最大输出 Tokens<small class="key-local-hint">（各家上限不同，思考型模型建议 32768 以上）</small></span>
-            <el-input-number
-              v-model="form.maxOutputTokens"
-              size="small"
-              :min="128"
-              :max="form.maxContext"
-              :step="512"
-              controls-position="right"
-            />
-          </label>
-          <label class="field">
-            <span>思考模式<small class="key-local-hint">{{ thinkingSupportHint }}</small></span>
-            <el-select v-model="form.thinking" size="small" class="ink-select" popper-class="ink-select-popper">
-              <el-option label="关闭（结构化任务更快更稳）" value="off" />
-              <el-option label="跟随模型默认" value="default" />
-              <el-option label="开启（请调大最大输出 Tokens）" value="on" />
-            </el-select>
-          </label>
-          <label class="field wide">
-            <span>额外请求参数<small class="key-local-hint">（JSON 对象，原样合并进请求体；自定义渠道的思考开关可填这里）</small></span>
-            <el-input
-              v-model="form.extraParams"
-              size="small"
-              type="textarea"
-              :rows="2"
-              placeholder='{"chat_template_kwargs":{"enable_thinking":false}}'
-            />
-          </label>
-        </div>
-
-        <div class="form-footer">
-          <el-switch v-model="modelEnabled" active-text="启用" inactive-text="禁用" />
-          <div class="form-actions">
-            <button class="ink-btn ink-btn-outline" type="button" :disabled="testingCurrent" @click="testCurrentModel">
-              <i v-if="testingCurrent" class="fa-solid fa-spinner fa-spin"></i>
-              <i v-else class="fa-solid fa-plug-circle-check"></i>
-              测试连接
-            </button>
-            <button class="ink-btn ink-btn-primary" type="button" :disabled="saving" @click="saveModel">
-              <i v-if="saving" class="fa-solid fa-spinner fa-spin"></i>
-              <i v-else class="fa-solid fa-floppy-disk"></i>
-              保存模型
-            </button>
-          </div>
-        </div>
-      </section>
-
-      <section class="model-card test-card">
-        <div class="card-head">
-          <div>
-            <h4>连接测试</h4>
-            <p>生图模型测试会真实请求供应商接口。</p>
-          </div>
-        </div>
-        <div class="test-result" :class="testResultClass">
-          <div class="test-icon">
-            <i v-if="testingCurrent" class="fa-solid fa-spinner fa-spin"></i>
-            <i v-else-if="testResult?.ok" class="fa-solid fa-check"></i>
-            <i v-else-if="testResult" class="fa-solid fa-xmark"></i>
-            <i v-else class="fa-solid fa-signal"></i>
-          </div>
-          <div class="test-body">
-            <strong>{{ testResultTitle }}</strong>
-            <span>{{ testResultMessage }}</span>
-          </div>
-        </div>
-        <dl class="test-meta">
-          <div>
-            <dt>请求地址</dt>
-            <dd :title="testResult?.url || form.baseUrl">{{ testResult?.url || form.baseUrl || '-' }}</dd>
-          </div>
-          <div>
-            <dt>耗时</dt>
-            <dd>{{ testResult?.latency ? `${testResult.latency}ms` : '-' }}</dd>
-          </div>
-          <div>
-            <dt>测试时间</dt>
-            <dd>{{ testResult?.testedAt || '-' }}</dd>
-          </div>
-        </dl>
-      </section>
-    </div>
-
+    <!-- 默认模型：六个槽位平铺。前三个是用户直接感知的功能；后三个默认跟随/自动，用一行小字分组说明即可 -->
     <section class="model-card default-card">
       <div class="card-head inline-head">
         <div>
           <h4>默认模型</h4>
-          <p>保存到当前账号，所有 AI 调用会优先使用该模型。</p>
+          <p>没选时自动用列表里第一个启用的模型；建书消耗大，需要你明确选一个。</p>
         </div>
         <button class="ink-btn ink-btn-outline compact-btn" type="button" @click="refreshModels">
           刷新
         </button>
       </div>
       <div class="default-grid">
-        <label class="field">
-          <span>写作助手</span>
-          <el-select v-model="textModelValue" size="small" class="model-select" popper-class="ai-model-select-popper">
-            <template #prefix>
-              <span class="model-select-prefix">
-                <img v-if="getSelectedModelIcon('text_assist')" :src="getSelectedModelIcon('text_assist')" alt="" />
-                <i v-else class="fa-solid fa-wand-magic-sparkles"></i>
-              </span>
-            </template>
-            <el-option label="智能推荐" value="">
-              <span class="model-select-option">
-                <span class="model-option-icon"><i class="fa-solid fa-wand-magic-sparkles"></i></span>
-                <span>智能推荐</span>
-              </span>
-            </el-option>
-            <el-option
-              v-for="model in aiModelStore.textModels"
-              :key="model.code"
-              :label="getModelOptionLabel(model)"
-              :value="model.code"
+        <template v-for="slot in defaultSlots" :key="slot.group">
+          <div v-if="slot.group === firstAdvancedGroup" class="slot-group-caption">
+            <span>进阶</span>
+            <small>默认跟随上面的设置或自动启用，一般不用改</small>
+          </div>
+          <label class="field">
+            <span>{{ slot.label }}<small class="key-local-hint">{{ slot.hint }}</small></span>
+            <!-- 该用途一个模型都没有：下拉没意义，直接给"去添加"的入口 -->
+            <div v-if="!slotModels(slot.group).length" class="slot-empty-note">
+              <i class="fa-solid fa-circle-info"></i>
+              <span>还没有{{ slot.sceneName }}模型，</span>
+              <button type="button" class="link-btn" @click="startAddModel(slot.scene)">添加一个</button>
+              <span>，添加后自动启用。</span>
+            </div>
+            <el-select
+              v-else
+              :model-value="aiModelStore.preferenceOf(slot.group)"
+              size="small"
+              class="model-select"
+              popper-class="ai-model-select-popper"
+              @update:model-value="setSlotValue(slot.group, $event)"
             >
-              <span class="model-select-option">
-                <span class="model-option-icon">
-                  <img v-if="getModelProviderIcon(model)" :src="getModelProviderIcon(model)" alt="" />
-                  <i v-else class="fa-solid fa-cube"></i>
+              <template #prefix>
+                <span class="model-select-prefix">
+                  <img v-if="getSelectedModelIcon(slot.group)" :src="getSelectedModelIcon(slot.group)" alt="" />
+                  <i v-else class="fa-solid" :class="slot.icon"></i>
                 </span>
-                <span class="model-option-copy">
-                  <span class="model-option-name">{{ getModelOptionLabel(model) }}</span>
-                  <span v-if="model.description" class="model-option-desc">{{ model.description }}</span>
+              </template>
+              <el-option :label="slotEmptyLabel(slot)" value="">
+                <span class="model-select-option">
+                  <span class="model-option-icon"><i class="fa-solid" :class="slot.icon"></i></span>
+                  <span class="model-option-copy">
+                    <span class="model-option-name">{{ slotEmptyLabel(slot) }}</span>
+                    <span class="model-option-desc">{{ slotEmptyDesc(slot) }}</span>
+                  </span>
                 </span>
-              </span>
-            </el-option>
-          </el-select>
-        </label>
-        <label class="field">
-          <span>工作流建书</span>
-          <el-select v-model="workflowModelValue" size="small" class="model-select" popper-class="ai-model-select-popper">
-            <template #prefix>
-              <span class="model-select-prefix">
-                <img v-if="getSelectedModelIcon('workflow_book')" :src="getSelectedModelIcon('workflow_book')" alt="" />
-                <i v-else class="fa-solid fa-wand-magic-sparkles"></i>
-              </span>
-            </template>
-            <el-option label="智能推荐" value="">
-              <span class="model-select-option">
-                <span class="model-option-icon"><i class="fa-solid fa-wand-magic-sparkles"></i></span>
-                <span>智能推荐</span>
-              </span>
-            </el-option>
-            <el-option
-              v-for="model in aiModelStore.workflowModels"
-              :key="model.code"
-              :label="getModelOptionLabel(model)"
-              :value="model.code"
-            >
-              <span class="model-select-option">
-                <span class="model-option-icon">
-                  <img v-if="getModelProviderIcon(model)" :src="getModelProviderIcon(model)" alt="" />
-                  <i v-else class="fa-solid fa-cube"></i>
+              </el-option>
+              <el-option
+                v-for="model in slotModels(slot.group)"
+                :key="model.code"
+                :label="getModelOptionLabel(model)"
+                :value="model.code"
+              >
+                <span class="model-select-option">
+                  <span class="model-option-icon">
+                    <img v-if="getModelProviderIcon(model)" :src="getModelProviderIcon(model)" alt="" />
+                    <i v-else class="fa-solid fa-cube"></i>
+                  </span>
+                  <span class="model-option-copy">
+                    <span class="model-option-name">{{ getModelOptionLabel(model) }}</span>
+                    <span v-if="model.description" class="model-option-desc">{{ model.description }}</span>
+                  </span>
                 </span>
-                <span class="model-option-copy">
-                  <span class="model-option-name">{{ getModelOptionLabel(model) }}</span>
-                  <span v-if="model.description" class="model-option-desc">{{ model.description }}</span>
-                </span>
-              </span>
-            </el-option>
-          </el-select>
-        </label>
-        <label class="field">
-          <span>图像生成</span>
-          <el-select v-model="imageModelValue" size="small" class="model-select" popper-class="ai-model-select-popper">
-            <template #prefix>
-              <span class="model-select-prefix">
-                <img v-if="getSelectedModelIcon('image_generation')" :src="getSelectedModelIcon('image_generation')" alt="" />
-                <i v-else class="fa-solid fa-image"></i>
-              </span>
-            </template>
-            <el-option label="智能推荐" value="">
-              <span class="model-select-option">
-                <span class="model-option-icon"><i class="fa-solid fa-image"></i></span>
-                <span>智能推荐</span>
-              </span>
-            </el-option>
-            <el-option
-              v-for="model in aiModelStore.imageModels"
-              :key="model.code"
-              :label="getModelOptionLabel(model)"
-              :value="model.code"
-            >
-              <span class="model-select-option">
-                <span class="model-option-icon">
-                  <img v-if="getModelProviderIcon(model)" :src="getModelProviderIcon(model)" alt="" />
-                  <i v-else class="fa-solid fa-cube"></i>
-                </span>
-                <span class="model-option-copy">
-                  <span class="model-option-name">{{ getModelOptionLabel(model) }}</span>
-                  <span v-if="model.description" class="model-option-desc">{{ model.description }}</span>
-                </span>
-              </span>
-            </el-option>
-          </el-select>
-        </label>
+              </el-option>
+            </el-select>
+          </label>
+        </template>
       </div>
     </section>
 
     <section class="model-card list-card">
       <div class="list-toolbar">
         <div>
-          <h4>我的模型列表</h4>
-          <p>{{ filteredModels.length }} 个模型</p>
+          <h4>我的模型</h4>
+          <p>{{ filteredModels.length }} 个模型 · 在这里接入供应商，上面的默认模型从这里选</p>
         </div>
         <div class="list-filters">
           <el-input v-model="keyword" size="small" clearable placeholder="搜索名称或代码">
@@ -340,11 +94,24 @@
             <el-option label="启用" value="enabled" />
             <el-option label="禁用" value="disabled" />
           </el-select>
+          <button class="ink-btn ink-btn-primary compact-btn" type="button" @click="startAddModel()">
+            <i class="fa-solid fa-plus"></i>
+            添加模型
+          </button>
         </div>
       </div>
 
       <div v-if="loading" class="empty-state">模型加载中...</div>
-      <div v-else-if="!filteredModels.length" class="empty-state">暂无自定义模型</div>
+      <div v-else-if="!filteredModels.length" class="empty-state">
+        <template v-if="models.length">没有符合筛选条件的模型</template>
+        <template v-else>
+          <p>还没有模型。接入你的供应商后，AI 功能会自动使用它。</p>
+          <button class="ink-btn ink-btn-primary" type="button" @click="startAddModel()">
+            <i class="fa-solid fa-plus"></i>
+            添加第一个模型
+          </button>
+        </template>
+      </div>
       <div v-else class="model-table-wrap">
         <table class="model-table">
           <thead>
@@ -409,15 +176,227 @@
         </table>
       </div>
     </section>
+
+    <!-- 添加 / 编辑模型：弹窗。页面上只留列表和默认模型，表单不常驻 -->
+    <EwModal
+      v-model:visible="composerOpen"
+      :title="editingId ? '编辑模型' : '添加模型'"
+      width="min(1040px, calc(100vw - 32px))"
+      max-height="92vh"
+      custom-class="ai-model-composer-modal"
+      :close-on-click-modal="false"
+      @close="closeComposer"
+    >
+      <div class="composer">
+        <div class="composer-section">
+          <div class="composer-section-head">
+            <h5>供应商</h5>
+            <p>选一家预设会自动填好接口地址与推荐参数，也可以选「自定义」</p>
+          </div>
+          <div class="provider-grid">
+            <button
+              v-for="preset in providerPresets"
+              :key="preset.provider"
+              type="button"
+              class="provider-card"
+              :class="{ active: form.provider === preset.provider }"
+              :aria-pressed="form.provider === preset.provider"
+              @click="applyProvider(preset)"
+            >
+              <span class="provider-icon" :class="{ 'is-custom': !preset.iconSrc }">
+                <img v-if="preset.iconSrc" :src="preset.iconSrc" :alt="`${preset.label} logo`" loading="lazy" />
+                <i v-else class="fa-solid fa-plus"></i>
+              </span>
+              <span class="provider-info">
+                <strong>{{ preset.label }}</strong>
+                <small>{{ preset.description }}</small>
+              </span>
+              <span v-if="form.provider === preset.provider" class="provider-check" aria-hidden="true">
+                <i class="fa-solid fa-check"></i>
+              </span>
+            </button>
+          </div>
+        </div>
+
+        <div class="composer-section">
+          <div class="composer-section-head">
+            <h5>连接信息</h5>
+            <p>当前支持 OpenAI 兼容协议；API Key 只保存在本机</p>
+          </div>
+          <div class="form-grid">
+            <label class="field">
+              <span>使用场景</span>
+              <el-select v-model="form.scene" size="small" popper-class="ai-model-select-popper">
+                <el-option label="文字生成（续写、建书、对话）" value="text" />
+                <el-option label="图像生成（封面）" value="image" />
+                <el-option label="向量（全书语义记忆，如 bge-m3、text-embedding-3）" value="embedding" />
+              </el-select>
+            </label>
+            <label class="field">
+              <span>服务商</span>
+              <el-select v-model="form.provider" size="small" popper-class="ai-model-select-popper">
+                <el-option
+                  v-for="preset in providerPresets"
+                  :key="preset.provider"
+                  :label="preset.label"
+                  :value="preset.provider"
+                />
+              </el-select>
+            </label>
+            <label class="field">
+              <span>模型名称</span>
+              <el-input v-model="form.name" size="small" maxlength="80" placeholder="我的 DeepSeek" />
+            </label>
+            <label ref="modelCodeFieldRef" class="field model-code-field">
+              <span>模型代码</span>
+              <div class="model-code-control">
+                <el-input
+                  v-model="form.modelCode"
+                  size="small"
+                  maxlength="120"
+                  placeholder="deepseek-chat"
+                  @focus="showRemoteModelPanel"
+                  @input="remoteModelPanelVisible = false"
+                />
+                <button
+                  class="fetch-model-btn"
+                  type="button"
+                  :disabled="remoteModelLoading"
+                  @click.prevent="fetchRemoteModels"
+                >
+                  <i v-if="remoteModelLoading" class="fa-solid fa-spinner fa-spin"></i>
+                  <i v-else class="fa-solid fa-cloud-arrow-down"></i>
+                  拉取
+                </button>
+              </div>
+              <div v-if="remoteModelPanelVisible" class="remote-model-panel">
+                <button
+                  v-for="code in remoteModels"
+                  :key="code"
+                  type="button"
+                  :class="{ active: form.modelCode === code }"
+                  @click.prevent="selectRemoteModel(code)"
+                >
+                  {{ code }}
+                </button>
+              </div>
+            </label>
+            <label class="field wide">
+              <span>Base URL</span>
+              <el-input v-model="form.baseUrl" size="small" maxlength="500" placeholder="https://api.example.com/v1" />
+            </label>
+            <label class="field wide">
+              <span>API Key<small class="key-local-hint">（只保存在本机；Ollama 等本地部署可留空）</small></span>
+              <el-input
+                v-model="form.apiKey"
+                size="small"
+                type="password"
+                show-password
+                :placeholder="editingId ? '留空则不修改' : '请输入 API Key'"
+              />
+            </label>
+            <label class="field">
+              <span>最大上下文</span>
+              <el-input-number
+                v-model="form.maxContext"
+                size="small"
+                :min="1024"
+                :max="1000000"
+                :step="1024"
+                controls-position="right"
+              />
+            </label>
+            <label v-if="form.scene !== 'embedding'" class="field">
+              <span>最大输出 Tokens<small class="key-local-hint">（各家上限不同，思考型模型建议 32768 以上）</small></span>
+              <el-input-number
+                v-model="form.maxOutputTokens"
+                size="small"
+                :min="128"
+                :max="form.maxContext"
+                :step="512"
+                controls-position="right"
+              />
+            </label>
+            <label v-if="form.scene !== 'embedding'" class="field">
+              <span>思考模式<small class="key-local-hint">{{ thinkingSupportHint }}</small></span>
+              <el-select v-model="form.thinking" size="small" class="ink-select" popper-class="ink-select-popper">
+                <el-option label="关闭（结构化任务更快更稳）" value="off" />
+                <el-option label="跟随模型默认" value="default" />
+                <el-option label="开启（请调大最大输出 Tokens）" value="on" />
+              </el-select>
+            </label>
+            <label v-if="form.scene !== 'embedding'" class="field">
+              <span>额外请求参数<small class="key-local-hint">（JSON 对象，原样合并进请求体）</small></span>
+              <el-input
+                v-model="form.extraParams"
+                size="small"
+                type="textarea"
+                :rows="1"
+                :autosize="{ minRows: 1, maxRows: 3 }"
+                placeholder='{"chat_template_kwargs":{"enable_thinking":false}}'
+              />
+            </label>
+          </div>
+        </div>
+
+        <!-- 连接测试结果：一条状态条，不再单独占一张卡 -->
+        <div class="test-result" :class="testResultClass">
+          <div class="test-icon">
+            <i v-if="testingCurrent" class="fa-solid fa-spinner fa-spin"></i>
+            <i v-else-if="testResult?.ok" class="fa-solid fa-check"></i>
+            <i v-else-if="testResult" class="fa-solid fa-xmark"></i>
+            <i v-else class="fa-solid fa-signal"></i>
+          </div>
+          <div class="test-body">
+            <strong>{{ testResultTitle }}</strong>
+            <span :title="testResultMessage">{{ testResultMessage }}</span>
+          </div>
+          <dl v-if="testResult" class="test-meta">
+            <div>
+              <dt>耗时</dt>
+              <dd>{{ testResult.latency ? `${testResult.latency}ms` : '-' }}</dd>
+            </div>
+            <div>
+              <dt>时间</dt>
+              <dd>{{ testResult.testedAt || '-' }}</dd>
+            </div>
+            <div class="test-meta-url">
+              <dt>地址</dt>
+              <dd :title="testResult.url || form.baseUrl">{{ testResult.url || form.baseUrl || '-' }}</dd>
+            </div>
+          </dl>
+        </div>
+      </div>
+
+      <template #footer>
+        <div class="composer-footer">
+          <el-switch v-model="modelEnabled" active-text="启用" inactive-text="禁用" />
+          <div class="form-actions">
+            <button class="ink-btn ink-btn-outline" type="button" @click="closeComposer">取消</button>
+            <button class="ink-btn ink-btn-outline" type="button" :disabled="testingCurrent" @click="testCurrentModel">
+              <i v-if="testingCurrent" class="fa-solid fa-spinner fa-spin"></i>
+              <i v-else class="fa-solid fa-plug-circle-check"></i>
+              测试连接
+            </button>
+            <button class="ink-btn ink-btn-primary" type="button" :disabled="saving" @click="saveModel">
+              <i v-if="saving" class="fa-solid fa-spinner fa-spin"></i>
+              <i v-else class="fa-solid fa-floppy-disk"></i>
+              {{ editingId ? '保存修改' : '保存模型' }}
+            </button>
+          </div>
+        </div>
+      </template>
+    </EwModal>
   </section>
 </template>
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
+import EwModal from '@/components/EwModal/index.vue'
 import { inkConfirm } from '@/utils/ink-confirm'
 import { showApiError } from '@/utils/api-error'
-import type { AiModelGroupCode, AiModelOption } from '@/types/ai-model'
+import { AI_MODEL_GROUPS, type AiModelGroupCode, type AiModelOption } from '@/types/ai-model'
 // 开源版：BYOK 模型走本地库+直连供应商（@/storage/local-ai-models + @/utils/local-ai-client），
 // 函数形状对齐原服务端接口，调用点不动；API Key 只存本机
 import {
@@ -431,7 +410,7 @@ import {
   listLocalAiRemoteModels as listUserAiRemoteModelsApi,
   testLocalAiModel as testUserAiModelApi,
 } from '@/utils/local-ai-client'
-import type { AiThinkingMode, UserAiModelSavePayload, UserAiModelTestResult } from '@/types/user-ai-model'
+import type { AiThinkingMode, UserAiModelSavePayload, UserAiModelScene, UserAiModelTestResult } from '@/types/user-ai-model'
 import { useAiModelStore } from '@/stores/ai-model'
 
 type ProviderPreset = {
@@ -484,7 +463,44 @@ const thinkingSupportHint = computed(() => {
 const sceneLabels: Record<string, string> = {
   text: '文字',
   image: '生图',
+  embedding: '向量',
 }
+
+/**
+ * 「默认模型」的槽位定义。主槽位是用户直接感知的三类功能；进阶槽位要么是省钱开关、
+ * 要么需要特殊类型的模型，默认跟随/自动。六个一起平铺，进阶那行前面加一行小字分组。
+ */
+type SlotDef = {
+  group: AiModelGroupCode
+  label: string
+  hint: string
+  icon: string
+  scene: UserAiModelScene
+  /** 空态文案里的用途名：还没有「文本」模型 */
+  sceneName: string
+}
+
+const primarySlots: SlotDef[] = [
+  { group: 'text_assist', label: '写作助手', hint: '续写、润色、妙笔、取名等日常功能', icon: 'fa-wand-magic-sparkles', scene: 'text', sceneName: '文本' },
+  { group: 'workflow_book', label: '工作流建书', hint: '按大纲逐章生成正文，建议用最强的模型', icon: 'fa-diagram-project', scene: 'text', sceneName: '文本' },
+  { group: 'image_generation', label: '图像生成', hint: '作品封面', icon: 'fa-image', scene: 'image', sceneName: '生图' },
+]
+
+const advancedSlots: SlotDef[] = [
+  { group: 'weixin', label: '微信助手', hint: '在微信里跟易创对话时用', icon: 'fa-comment-dots', scene: 'text', sceneName: '文本' },
+  { group: 'background', label: '后台整理', hint: '每章写完后自动整理人物状态与伏笔，调用次数多，可选便宜的', icon: 'fa-clipboard-list', scene: 'text', sceneName: '文本' },
+  { group: 'embedding', label: '全书语义记忆', hint: '让妙笔和续写按意思找到前文相关段落，需要向量（embedding）模型', icon: 'fa-brain', scene: 'embedding', sceneName: '向量' },
+  { group: 'agent_planner', label: 'Agent 规划', hint: 'Agent 对话主循环：理解指令、调用工具、规划拍子', icon: 'fa-diagram-project', scene: 'text', sceneName: '文本' },
+  { group: 'agent_writer', label: 'Agent 写作', hint: '生成正文与定向修订，可以选更强的模型', icon: 'fa-pen-nib', scene: 'text', sceneName: '文本' },
+  { group: 'agent_critic', label: 'Agent 评审', hint: '读者模拟体检，可与写作模型不同', icon: 'fa-magnifying-glass', scene: 'text', sceneName: '文本' },
+  { group: 'agent_indexer', label: 'Agent 索引', hint: '章节卡提取与记忆整理，调用次数多，建议用便宜快的', icon: 'fa-layer-group', scene: 'text', sceneName: '文本' },
+]
+
+const defaultSlots: SlotDef[] = [...primarySlots, ...advancedSlots]
+const firstAdvancedGroup = advancedSlots[0].group
+
+/** 添加/编辑模型的弹窗 */
+const composerOpen = ref(false)
 
 const aiModelStore = useAiModelStore()
 const loading = ref(false)
@@ -528,26 +544,54 @@ const modelEnabled = computed({
   },
 })
 
-const textModelValue = computed({
-  get: () => aiModelStore.textModel,
-  set: value => {
-    void aiModelStore.setTextModel(String(value || ''))
-  },
-})
+const slotModels = (group: AiModelGroupCode) => aiModelStore.groups[group]?.models || []
 
-const workflowModelValue = computed({
-  get: () => aiModelStore.workflowModel,
-  set: value => {
-    void aiModelStore.setWorkflowModel(String(value || ''))
-  },
-})
+const setSlotValue = (group: AiModelGroupCode, value: unknown) => {
+  void aiModelStore.setGroupModel(group, String(value || ''))
+}
 
-const imageModelValue = computed({
-  get: () => aiModelStore.imageModel,
-  set: value => {
-    void aiModelStore.setImageModel(String(value || ''))
-  },
-})
+/** 该分组实际生效的模型名（没选时是自动/跟随到的那个） */
+const effectiveModelName = (group: AiModelGroupCode) => {
+  const code = aiModelStore.effectiveModelCode(group)
+  if (!code) return ''
+  const model = slotModels(group).find(item => item.code === code) || aiModelStore.textModels.find(item => item.code === code)
+  return model ? model.name || model.modelCode || code : ''
+}
+
+/** 分组没单独选时跟随哪个分组（取自模型分组表），没有回退的返回空 */
+const groupFallbackLabel = (group: AiModelGroupCode) => {
+  const fallback = AI_MODEL_GROUPS.find(item => item.code === group)?.fallback
+  return fallback ? AI_MODEL_GROUPS.find(item => item.code === fallback)?.name || '' : ''
+}
+
+/** 空选项的标题：把"没选"时到底会用哪个模型直接写出来，不再叫"智能推荐" */
+const slotEmptyLabel = (slot: SlotDef) => {
+  const name = effectiveModelName(slot.group)
+  if (slot.group === 'workflow_book') return '未设置'
+  const fallback = groupFallbackLabel(slot.group)
+  if (fallback) return name ? `跟随${fallback} · ${name}` : `跟随${fallback}`
+  return name ? `自动 · ${name}` : `未添加${slot.sceneName}模型`
+}
+
+const slotEmptyDesc = (slot: SlotDef) => {
+  if (slot.group === 'workflow_book') return '建书消耗大，请明确选一个；不会自动借用写作助手的模型'
+  const fallback = groupFallbackLabel(slot.group)
+  if (fallback) return `不单独选时与${fallback}用同一个模型`
+  return `不指定时自动用列表里第一个启用的${slot.sceneName}模型`
+}
+
+/** 打开添加弹窗；从某个槽位的"添加一个"进来时预选对应用途 */
+const startAddModel = (scene?: UserAiModelScene) => {
+  resetForm()
+  if (scene) form.scene = scene
+  composerOpen.value = true
+}
+
+/** 关闭弹窗并清掉表单：取消、右上角 X、保存成功都走这里 */
+const closeComposer = () => {
+  composerOpen.value = false
+  resetForm()
+}
 
 const filteredModels = computed(() => {
   const term = keyword.value.trim().toLowerCase()
@@ -615,12 +659,19 @@ const saveModel = async () => {
   try {
     const payload = buildPayload()
     const wasEditing = Boolean(editingId.value)
+    const sceneHadNone = !models.value.some(model => model.scene === payload.scene && model.status === 1)
     await saveUserAiModelApi(payload)
-    // 保存即完成：表单回到空白的新增态，不再绑着刚存的那条。
+    // 保存即关弹窗回到列表，刚存的那条在列表里、默认模型里都能看到。
     // 之前保存后表单仍处于该条的编辑态，用户接着改再点保存，就把上一条悄悄覆盖了。
     // 要改已保存的模型，从列表点「编辑」显式进入。
-    resetForm()
-    ElMessage.success(wasEditing ? '模型已更新' : '模型已保存，已加入下方列表；表单已清空，可继续添加')
+    closeComposer()
+    ElMessage.success(
+      wasEditing
+        ? '模型已更新'
+        : sceneHadNone && payload.status === 1
+          ? '模型已保存；这是第一个可用的该用途模型，相关 AI 功能会自动使用它'
+          : '模型已保存，已加入列表；要让某个功能用它，在上方「默认模型」里选'
+    )
     await refreshModels()
   } catch (error) {
     showApiError(error, '保存模型失败')
@@ -719,7 +770,7 @@ const closeRemoteModelPanelOnOutside = (event: MouseEvent) => {
 const editModel = (model: AiModelOption) => {
   editingId.value = model.id
   form.name = model.name || ''
-  form.scene = model.scene === 'image' ? 'image' : 'text'
+  form.scene = model.scene === 'image' ? 'image' : model.scene === 'embedding' ? 'embedding' : 'text'
   form.provider = model.provider || 'custom'
   form.protocol = 'openai_compatible'
   form.modelCode = model.modelCode || ''
@@ -732,7 +783,7 @@ const editModel = (model: AiModelOption) => {
   form.status = model.status === 0 ? 0 : 1
   testResult.value = null
   clearRemoteModels()
-  ElMessage.info('API Key 留空则不修改')
+  composerOpen.value = true
 }
 
 const toggleStatus = async (model: AiModelOption) => {
@@ -762,7 +813,7 @@ const deleteModel = async (model: AiModelOption) => {
   try {
     await deleteUserAiModelApi(model.id)
     ElMessage.success('模型已删除')
-    if (editingId.value === model.id) resetForm()
+    if (editingId.value === model.id) closeComposer()
     await refreshModels()
   } catch (error) {
     showApiError(error, '删除模型失败')
@@ -907,14 +958,13 @@ const getModelOptionLabel = (model: AiModelOption) => {
   return model.ownerType === 'user' ? `${name} · 自定义` : name
 }
 
+/** 槽位前缀图标用的模型：没选时也显示自动/跟随到的那个，让"没选"不等于"没有" */
 const getSelectedModel = (groupCode: AiModelGroupCode) => {
-  const selectedCode = groupCode === 'text_assist'
-    ? aiModelStore.textModel
-    : groupCode === 'workflow_book'
-      ? aiModelStore.workflowModel
-      : aiModelStore.imageModel
-  const models = aiModelStore.groups[groupCode]?.models || []
-  return models.find(item => item.code === selectedCode) || aiModelStore.groups[groupCode]?.defaultModel || null
+  const selectedCode = aiModelStore.effectiveModelCode(groupCode)
+  if (!selectedCode) return null
+  return slotModels(groupCode).find(item => item.code === selectedCode)
+    || aiModelStore.textModels.find(item => item.code === selectedCode)
+    || null
 }
 
 const getSelectedModelIcon = (groupCode: AiModelGroupCode) => {
@@ -1079,12 +1129,6 @@ const getTestClass = (status?: number) => {
   justify-content: center;
   font-size: 10px;
   box-shadow: 0 6px 16px rgba(var(--ink-accent-rgb, 180, 100, 40), 0.24);
-}
-
-.model-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.65fr);
-  gap: 12px;
 }
 
 .model-card {
@@ -1272,14 +1316,6 @@ const getTestClass = (status?: number) => {
   }
 }
 
-.form-footer {
-  margin-top: 14px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
 .form-actions {
   display: flex;
   align-items: center;
@@ -1292,19 +1328,15 @@ const getTestClass = (status?: number) => {
   font-size: 12px;
 }
 
-.test-card {
-  display: flex;
-  flex-direction: column;
-}
-
+// 连接测试结果：弹窗底部一条状态条，耗时/时间/地址横着排在右侧
 .test-result {
-  margin-top: 14px;
-  padding: 12px;
+  padding: 10px 12px;
   border-radius: 8px;
   border: 1px solid var(--input-border);
   background: var(--input-bg);
   display: flex;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: 10px 14px;
   align-items: center;
 
   &.success {
@@ -1327,8 +1359,9 @@ const getTestClass = (status?: number) => {
 }
 
 .test-icon {
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
+  font-size: 12px;
   border-radius: 50%;
   border: 1px solid currentColor;
   display: inline-flex;
@@ -1338,10 +1371,11 @@ const getTestClass = (status?: number) => {
 }
 
 .test-body {
+  flex: 1 1 220px;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 
   strong,
   span {
@@ -1350,38 +1384,48 @@ const getTestClass = (status?: number) => {
     white-space: nowrap;
   }
 
+  strong {
+    font-size: 13px;
+  }
+
   span {
     font-size: 12px;
   }
 }
 
 .test-meta {
-  margin: 12px 0 0;
-  display: grid;
-  gap: 8px;
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 14px;
+  font-size: 12px;
 
   div {
-    display: grid;
-    grid-template-columns: 70px minmax(0, 1fr);
-    gap: 8px;
+    display: flex;
+    gap: 4px;
+    min-width: 0;
   }
 
   dt,
   dd {
     margin: 0;
-    font-size: 12px;
     line-height: 1.5;
+    white-space: nowrap;
   }
 
   dt {
-    color: var(--settings-muted-color, var(--ink-sec));
+    opacity: 0.72;
   }
 
   dd {
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
-    white-space: nowrap;
+  }
+
+  .test-meta-url dd {
+    max-width: 280px;
   }
 }
 
@@ -1395,9 +1439,10 @@ const getTestClass = (status?: number) => {
 
 .list-filters {
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) 118px;
+  grid-template-columns: minmax(160px, 1fr) 110px auto;
+  align-items: center;
   gap: 8px;
-  width: min(420px, 50%);
+  width: min(540px, 60%);
 }
 
 .empty-state {
@@ -1408,6 +1453,10 @@ const getTestClass = (status?: number) => {
   color: var(--settings-muted-color, var(--ink-sec));
   text-align: center;
   font-size: 13px;
+
+  p {
+    margin: 0 0 12px;
+  }
 }
 
 .model-table-wrap {
@@ -1636,25 +1685,35 @@ const getTestClass = (status?: number) => {
 }
 
 :global(.ai-model-select-popper .el-select-dropdown__item) {
-  // 两行选项（模型名 + 卖点备注）需要自适应高度
+  // 两行选项（模型名 + 说明）需要自适应高度；上下留足内边距，说明文字不贴边
   height: auto;
   min-height: 38px;
-  padding: 5px 12px;
+  padding: 8px 12px;
   border-radius: 6px;
-  line-height: 1.45;
+  line-height: 1.4;
   // 弹层底色是主题玻璃色，选项文字必须跟主题走，不能用 element-plus 浅色默认值
   color: var(--ink-sec);
+}
+
+:global(.ai-model-select-popper .el-select-dropdown__item + .el-select-dropdown__item) {
+  margin-top: 2px;
 }
 
 :global(.ai-model-select-popper .model-option-copy) {
   display: flex;
   flex-direction: column;
+  gap: 3px;
   min-width: 0;
+}
+
+:global(.ai-model-select-popper .model-option-name) {
+  line-height: 1.3;
 }
 
 :global(.ai-model-select-popper .model-option-desc) {
   font-size: 11px;
   font-weight: 400;
+  line-height: 1.35;
   opacity: 0.72;
   white-space: nowrap;
   overflow: hidden;
@@ -1724,7 +1783,6 @@ const getTestClass = (status?: number) => {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .model-grid,
   .default-grid {
     grid-template-columns: 1fr;
   }
@@ -1766,5 +1824,143 @@ const getTestClass = (status?: number) => {
   font-size: 11px;
   font-weight: 400;
   color: var(--ink-sec);
+}
+
+// 默认模型里"进阶"那一行的分组小字：横跨整行，隔开两组槽位但不折叠
+.slot-group-caption {
+  grid-column: 1 / -1;
+  margin-top: 6px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--input-border);
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--ink-sec);
+
+  span {
+    font-weight: 600;
+    color: var(--ink-main);
+  }
+
+  small {
+    font-size: 11px;
+  }
+}
+
+// 某用途一个模型都没有时，槽位位置放一行提示 + 添加入口，高度与下拉框对齐
+.slot-empty-note {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 0 10px;
+  border: 1px dashed var(--input-border);
+  border-radius: 6px;
+  color: var(--ink-sec);
+  font-size: 12px;
+  line-height: 1.5;
+
+  i {
+    margin-right: 4px;
+    color: var(--ink-accent);
+  }
+}
+
+.link-btn {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink-accent);
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+
+  &:hover {
+    opacity: 0.8;
+  }
+}
+
+// 添加/编辑模型弹窗的内容：供应商、连接信息两段 + 测试状态条
+.composer {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 2px 0;
+
+  // 弹窗里供应商卡片比页面上紧凑：13 家要在一屏内看全
+  .provider-grid {
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 8px;
+  }
+
+  .provider-card {
+    min-height: 60px;
+    padding: 10px 28px 10px 10px;
+    gap: 10px;
+    box-shadow: none;
+    backdrop-filter: none;
+  }
+
+  .provider-icon {
+    width: 36px;
+    height: 36px;
+
+    img {
+      width: 24px;
+      height: 24px;
+    }
+  }
+
+  .provider-info strong {
+    font-size: 12px;
+  }
+
+  .provider-info small {
+    font-size: 10px;
+    line-height: 1.35;
+  }
+
+  .provider-check {
+    top: 8px;
+    right: 8px;
+    width: 16px;
+    height: 16px;
+    font-size: 9px;
+  }
+
+  .form-grid {
+    margin-top: 10px;
+  }
+}
+
+.composer-section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 10px;
+
+  h5 {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink-main);
+  }
+
+  p {
+    margin: 0;
+    font-size: 12px;
+    color: var(--settings-muted-color, var(--ink-sec));
+  }
+}
+
+.composer-footer {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 </style>

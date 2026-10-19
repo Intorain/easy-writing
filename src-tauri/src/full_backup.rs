@@ -2,7 +2,7 @@
 //!
 //! 前端负责把作品库、正文、设置等逻辑数据整理成 JSON，字体等二进制按原样传入；
 //! 这里只做三件事：暂存前端逐条送来的文件、压成一个包、解包后按条目回读。
-//! 提示词是 Documents/易创提示词 下的 md 文件，由这里直接进出压缩包。
+//! 提示词文档与完整技能包由统一文件服务进出压缩包。
 //!
 //! 大文件（字体可到 50 MB）走 IPC 原始字节体，不经 JSON 序列化。
 
@@ -130,15 +130,6 @@ fn entry_name(root: &Path, path: &Path, prefix: &str) -> Result<String, String> 
     Ok(format!("{prefix}{joined}"))
 }
 
-fn is_prompt_file(path: &Path) -> bool {
-    let ext = path
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    ext == "md" || ext == "txt"
-}
-
 fn add_dir_to_zip(
     writer: &mut ZipWriter<File>,
     root: &Path,
@@ -158,10 +149,6 @@ fn add_dir_to_zip(
             continue;
         }
         if !path.is_file() {
-            continue;
-        }
-        // 提示词目录只带文档，用户随手放进去的其它文件不进包
-        if !prefix.is_empty() && !is_prompt_file(&path) {
             continue;
         }
         let name = entry_name(root, &path, prefix)?;
@@ -262,6 +249,7 @@ fn seal_manifest(dir: &Path, include_prompts: bool) -> Result<(), String> {
     }
     manifest["checksums"] = serde_json::to_value(hashes).map_err(|e| e.to_string())?;
     manifest["includesPrompts"] = include_prompts.into();
+    manifest["includesSkillPackages"] = include_prompts.into();
     fs::write(
         manifest_path,
         serde_json::to_vec_pretty(&manifest).map_err(|e| e.to_string())?,
@@ -334,10 +322,7 @@ pub fn full_backup_finish(
         if include_prompts {
             let prompt_dir = crate::prompt_dir_path()?;
             if prompt_dir.is_dir() {
-                for source in all_files(&prompt_dir)? {
-                    if !is_prompt_file(&source) {
-                        continue;
-                    }
+                for source in crate::prompt_files::files(&prompt_dir)? {
                     let dest = dir.join("prompts").join(
                         source
                             .strip_prefix(&prompt_dir)
@@ -456,44 +441,94 @@ pub fn full_restore_read_entry(session: String, path: String) -> Result<Response
     Ok(Response::new(InvokeResponseBody::Raw(bytes)))
 }
 
-/// 把包里的提示词文档写回提示词目录。overwrite=先清空再写；merge=只补缺失的文件
+/// 普通文档按模式合并；技能始终按整包恢复，编号由数据库合并计划给定。
 #[tauri::command(async)]
 pub fn full_restore_apply_prompts(session: String, mode: String) -> Result<usize, String> {
-    let source = session_dir(&session)?.join("prompts");
-    if !source.is_dir() {
-        return Ok(0);
-    }
-    let prompt_dir = crate::ensure_prompt_dir()?;
-    if mode == "overwrite" {
-        for path in all_files(&prompt_dir)? {
-            if is_prompt_file(&path) {
-                fs::remove_file(path).map_err(|e| e.to_string())?;
+    restore_prompts(&session, &mode, &crate::ensure_prompt_dir()?, &HashMap::new())
+}
+
+pub fn restore_prompts(session: &str, mode: &str, prompt_dir: &Path, skill_ids: &HashMap<String, String>) -> Result<usize, String> {
+    let source = session_dir(session)?.join("prompts");
+    if !source.is_dir() { return Ok(0); }
+    let manifest: serde_json::Value = serde_json::from_slice(&fs::read(session_dir(session)?.join(MANIFEST_NAME)).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    let complete_skills = manifest["includesSkillPackages"] == true;
+    let incoming = crate::prompt_files::files(&source)?;
+    let current = crate::prompt_files::files(prompt_dir)?;
+    let mut copies = Vec::new();
+    for path in incoming {
+        let relative = path.strip_prefix(&source).map_err(|e| e.to_string())?;
+        let parts: Vec<_> = relative.iter().collect();
+        let target_relative = if parts.len() >= 3 && parts[0] == "skills" {
+            if !complete_skills { return Err("旧备份不包含完整技能包，请用新版重新备份后恢复技能".into()); }
+            let old_id = parts[1].to_string_lossy();
+            let next = skill_ids.get(old_id.as_ref()).map(String::as_str).unwrap_or(&old_id);
+            if !crate::agent_skill_files::valid_id(next) { return Err("恢复的技能编号无效".into()); }
+            // 无索引的技能也保持整包边界，不能只补其中缺失的文件。
+            if mode == "merge" && prompt_dir.join("skills").join(next).exists() {
+                if skill_ids.contains_key(old_id.as_ref()) { return Err("恢复的技能目录已存在，请重新打开备份重试".into()); }
+                continue;
             }
+            PathBuf::from("skills").join(next).join(parts[2..].iter().collect::<PathBuf>())
+        } else { relative.to_path_buf() };
+        let target = crate::prompt_files::checked_target(prompt_dir, &target_relative)?;
+        if mode != "overwrite" && target.exists() { continue; }
+        copies.push((path, target));
+    }
+    if mode == "overwrite" {
+        for path in current {
+            if !complete_skills && path.strip_prefix(prompt_dir).is_ok_and(|p| p.starts_with("skills")) { continue; }
+            fs::remove_file(path).map_err(|e| e.to_string())?;
         }
     }
-    let mut count = 0;
-    for path in all_files(&source)? {
-        if !is_prompt_file(&path) {
-            continue;
-        }
-        let target = prompt_dir.join(path.strip_prefix(&source).map_err(|e| e.to_string())?);
-        if mode != "overwrite" && target.exists() {
-            continue;
-        }
-        if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
-        fs::copy(&path, &target).map_err(|e| e.to_string())?;
-        // Windows FlushFileBuffers requires a writable handle.
-        fs::OpenOptions::new()
-            .write(true)
-            .open(&target)
-            .map_err(|e| e.to_string())?
-            .sync_all()
-            .map_err(|e| e.to_string())?;
-        count += 1;
+    for (path, target) in &copies {
+        fs::create_dir_all(target.parent().ok_or("提示词路径无效")?).map_err(|e| e.to_string())?;
+        fs::copy(path, target).map_err(|e| e.to_string())?;
+        fs::OpenOptions::new().write(true).open(target).map_err(|e| e.to_string())?.sync_all().map_err(|e| e.to_string())?;
     }
-    Ok(count)
+    Ok(copies.len())
+}
+
+/// 重建本机路径并撤销跨机器的脚本授权。旧包若缺脚本资源，拒绝不完整恢复。
+pub fn prepare_skill_records(session: &str, prompts: &Path, stores: &mut [crate::desktop_storage::StoreDump], skill_ids: &HashMap<String, String>) -> Result<(), String> {
+    let dir = session_dir(session)?;
+    let manifest: serde_json::Value = serde_json::from_slice(&fs::read(dir.join(MANIFEST_NAME)).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    for store in stores.iter_mut().filter(|s| s.namespace == crate::agent_store::OP_NS) {
+        store.records.retain(|r| !r.key.as_str().is_some_and(|key| key.starts_with("skill-consent:") || key.starts_with("skill-consent-token:")));
+    }
+    for store in stores.iter_mut().filter(|s| s.namespace == crate::agent_store::NS) {
+        for record in &mut store.records {
+            if !record.key.as_str().is_some_and(|k| k.starts_with("skill:")) { continue; }
+            let mut value: serde_json::Value = serde_json::from_str(&record.value).map_err(|e| e.to_string())?;
+            let id = value["id"].as_str().ok_or("技能编号缺失")?.to_owned();
+            if !crate::agent_skill_files::valid_id(&id) { return Err("技能编号无效".into()); }
+            value["approvedHash"] = serde_json::Value::Null;
+            value["approvedAt"] = serde_json::Value::Null;
+            value["lastRun"] = serde_json::Value::Null;
+            value["recoveryPath"] = serde_json::Value::Null;
+            if value["deletedAt"].is_number() {
+                value["filePath"] = serde_json::Value::Null;
+                record.value = serde_json::to_string(&value).map_err(|e| e.to_string())?;
+                continue;
+            }
+            if value["source"] == "builtin" && value["fileSource"] != "user" {
+                value["filePath"] = serde_json::Value::Null; // 启动时由本机内置包同步
+            } else {
+                let original = skill_ids.iter().find_map(|(old, new)| (new == &id).then_some(old.as_str())).unwrap_or(&id);
+                let package = dir.join("prompts/skills").join(original);
+                if package.join("SKILL.md").is_file() {
+                    if value["python"] == true && manifest["includesSkillPackages"] != true {
+                        return Err(format!("备份里的技能 {original} 未包含完整脚本，请使用新版重新备份后恢复"));
+                    }
+                    crate::agent_skill_files::inspect(&package)?;
+                    value["filePath"] = prompts.join("skills").join(&id).join("SKILL.md").to_string_lossy().into_owned().into();
+                } else if value["filePath"].as_str().is_some() || value["python"] == true {
+                    return Err(format!("备份缺少技能 {original} 的文件，请使用包含提示词和技能的完整备份"));
+                }
+            }
+            record.value = serde_json::to_string(&value).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
 }
 
 /// 结束恢复会话，清理暂存目录
@@ -592,3 +627,7 @@ mod tests {
         fs::remove_file(path).unwrap();
     }
 }
+
+#[cfg(all(test, feature = "local-tests"))]
+#[path = "full_backup_skill_tests.rs"]
+mod release_tests;

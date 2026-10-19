@@ -44,6 +44,7 @@
           <section v-else-if="activeSection === 'record'" class="settings-pane settings-pane--fill">
             <AiRecordPane />
           </section>
+          <WeixinBotPane v-else-if="activeSection === 'weixin'" />
           <CachePane v-else />
         </div>
       </main>
@@ -97,6 +98,7 @@ import WritingPane from './panes/WritingPane.vue'
 import AppearancePane from './panes/AppearancePane.vue'
 import SyncPane from './panes/SyncPane.vue'
 import SensitiveWordsPane from './panes/SensitiveWordsPane.vue'
+import WeixinBotPane from './panes/WeixinBotPane.vue'
 import CachePane from './panes/CachePane.vue'
 
 const props = defineProps<{
@@ -136,6 +138,7 @@ const navGroups: SettingsNavGroup[] = [
     title: 'AI 设置',
     items: [
       { id: 'record', label: 'AI 调用记录', icon: 'fa-regular fa-clipboard' },
+      { id: 'weixin', label: '微信助手', icon: 'fa-brands fa-weixin' },
     ],
   },
   {
@@ -154,6 +157,7 @@ const sectionMeta: Record<SettingsSectionId, { title: string; description: strin
   sync: { title: '保存与备份', description: '管理本地自动保存、备份与版本保留策略' },
   sensitive: { title: '敏感词库', description: '管理写作台敏感词检查的内置词库与自定义词' },
   record: { title: 'AI 调用记录', description: '查看模型调用、工作流生成与会话记录' },
+  weixin: { title: '微信助手', description: '绑定个人微信里的 ClawBot，在微信里查榜单、找灵感、看作品状态' },
   cache: { title: '存储空间', description: '查看本地缓存占用并清理临时数据' },
 }
 
@@ -204,9 +208,15 @@ watch(activeSection, async () => {
   if (paneScrollRef.value) paneScrollRef.value.scrollTop = 0
 })
 
-// AI 调用记录（只读）与敏感词库（改动即时生效）不适用底部「保存设置」草稿语义
-const isInstantSection = computed(() => activeSection.value === 'record' || activeSection.value === 'sensitive')
-const instantHint = computed(() => (activeSection.value === 'sensitive' ? '词库改动即时生效' : '本页为只读记录'))
+// AI 调用记录（只读）、敏感词库与微信助手（改动即时生效）不适用底部「保存设置」草稿语义
+const isInstantSection = computed(() =>
+  activeSection.value === 'record' || activeSection.value === 'sensitive' || activeSection.value === 'weixin'
+)
+const instantHint = computed(() => {
+  if (activeSection.value === 'sensitive') return '词库改动即时生效'
+  if (activeSection.value === 'weixin') return '绑定与开关改动即时生效'
+  return '本页为只读记录'
+})
 
 const loadSettings = async () => {
   loading.value = true

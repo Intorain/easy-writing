@@ -6,7 +6,11 @@ import { ElMessage } from 'element-plus'
 import { getAiShortcutTitle } from '@/utils/platform'
 import { NO_MODEL_MESSAGE, requestLocalChatCompletion, streamLocalChatCompletion } from '@/utils/local-ai-client'
 import { autocompleteTemperature, buildAutocompleteMessages } from '@/config/ai-prompts'
+import { editorContext } from '@/agent/writing-context'
 import { useAiModelStore } from '@/stores/ai-model'
+import { runDraftGuard } from '@/ai/verify/consistency'
+import { buildNotesContext } from '@/storage/ai-notes'
+import { buildStyleExemplars } from '@/ai/memory/style'
 import {
   extractAutocompletePrefix,
   extractSceneTailAnchor,
@@ -28,6 +32,8 @@ interface AiAutocompleteOptions {
   onSelectionMenu: () => void
   /** 流式续写每插入一段就回调一次，用于码字账本把这些字记到 AI 名下 */
   onAiTextInserted: (text: string) => void
+  /** 一次快捷续写结束后回调整段文字，用于记下 AI 片段的指纹 */
+  onAiSpanInserted?: (text: string) => void
 }
 
 /**
@@ -48,6 +54,7 @@ export const useAiAutocomplete = (options: AiAutocompleteOptions) => {
     onDraftDirty,
     onSelectionMenu,
     onAiTextInserted,
+    onAiSpanInserted,
   } = options
 
   const isAiThinking = ref(false)
@@ -59,10 +66,13 @@ export const useAiAutocomplete = (options: AiAutocompleteOptions) => {
 
   interface AiConfigState {
     enabled: boolean
+    /** 快捷续写写完后在后台核对设定，有实质冲突时自动修订刚插入的段落 */
+    verify: boolean
   }
 
   const defaultAiConfig: AiConfigState = {
     enabled: true,
+    verify: true,
   }
 
   const AI_CONFIG_STORAGE_KEY = 'ew_ai_copilot_config'
@@ -78,6 +88,7 @@ export const useAiAutocomplete = (options: AiAutocompleteOptions) => {
           typeof parsed.enabled === 'boolean'
             ? parsed.enabled
             : defaultAiConfig.enabled,
+        verify: typeof parsed.verify === 'boolean' ? parsed.verify : defaultAiConfig.verify,
       }
     } catch {
       return { ...defaultAiConfig }
@@ -119,6 +130,56 @@ export const useAiAutocomplete = (options: AiAutocompleteOptions) => {
     isAiThinking.value = aiBusyCounter.value > 0
   }
 
+  const squashText = (text: string) => text.replace(/\s+/g, '')
+
+  /**
+   * 续写写完后在后台核对设定：对照角色资料与故事状态找实质冲突，有就把刚插入的那段换成修订稿。
+   * 作者已经改动过这段、或切了章，则只提示不替换——核对永远不能覆盖作者的手。
+   */
+  const guardContinuation = async (params: {
+    ed: Editor
+    from: number
+    to: number
+    text: string
+    preText: string
+    chapterIdAtStart: number
+    modelCode: string
+  }) => {
+    setAiBusy(true)
+    try {
+      const outcome = await runDraftGuard({
+        bookId: options.bookId() ?? '',
+        chapterId: params.chapterIdAtStart,
+        draft: params.text,
+        previousTail: params.preText,
+        modelCode: params.modelCode,
+      })
+      if (outcome.status === 'failed') {
+        console.warn('续写核对未完成', outcome.error)
+        return
+      }
+      const substantive = outcome.issues.filter(issue => issue.severity !== 'low').length
+      if (!outcome.revised) {
+        if (substantive) ElMessage.info(`续写与设定可能有 ${substantive} 处出入：${outcome.issues[0].text}`)
+        return
+      }
+      const { ed } = params
+      if (Number(activeChapterId.value || 0) !== params.chapterIdAtStart || workflowMode.value || workflowLocked.value) return
+      const to = Math.min(params.to, ed.state.doc.content.size)
+      if (squashText(ed.state.doc.textBetween(params.from, to, '\n')) !== squashText(params.text)) {
+        ElMessage.info('续写段落已被改动，设定核对结果未应用')
+        return
+      }
+      ed.chain().insertContentAt({ from: params.from, to }, outcome.text).run()
+      onDraftDirty()
+      ElMessage.success(`已核对设定，修订了 ${substantive} 处：${outcome.issues[0].text}`)
+    } catch (error) {
+      if ((error as { name?: string })?.name !== 'AbortError') console.warn('续写核对未完成', error)
+    } finally {
+      setAiBusy(false)
+    }
+  }
+
   const fetchAiSuggestion = async (payload: {
     context: string
     mode: 'inline' | 'next_beat'
@@ -138,13 +199,17 @@ export const useAiAutocomplete = (options: AiAutocompleteOptions) => {
       const localPreText = extractAutocompletePrefix(payload.context, 3, 220)
       const sceneAnchor = extractSceneTailAnchor(localPreText, 2, 160)
       // 被动触发的补全：没配模型就静默跳过，不打断码字（设置浮层里能看到模型状态）
-      let modelCode = autocompleteModelOverride.value || aiModelStore.textModel
+      let modelCode = autocompleteModelOverride.value || aiModelStore.effectiveTextModel
       if (!modelCode) {
         await aiModelStore.loadTextModels()
-        modelCode = aiModelStore.textModel
+        modelCode = aiModelStore.effectiveTextModel
       }
       if (!modelCode) return null
-      const characterContext = await loadCharacterContext(options.bookId(), [payload.context, activeChapterTitle.value, activeChapterSummary.value].join('\n'))
+      const [characterContext, notesContext, contextBlocks] = await Promise.all([
+        loadCharacterContext(options.bookId(), [payload.context, activeChapterTitle.value, activeChapterSummary.value].join('\n')),
+        buildNotesContext(options.bookId(), 800),
+        editorContext(String(options.bookId() ?? ''), activeChapterId.value, 'ghost'),
+      ])
       if (controller.signal.aborted) return null
       const data = await requestLocalChatCompletion({
         scene: 'typing_autocomplete',
@@ -153,10 +218,11 @@ export const useAiAutocomplete = (options: AiAutocompleteOptions) => {
         temperature: autocompleteTemperature(payload.mode),
         messages: buildAutocompleteMessages({
           preText: localPreText,
-          characterContext,
+          characterContext: [notesContext, characterContext].filter(Boolean).join('\n\n'),
           sceneAnchor,
           chapterTitle: activeChapterTitle.value || '',
           chapterSummary: activeChapterSummary.value || '',
+          contextBlocks,
           mode: payload.mode,
         }),
         maxTokens: payload.mode === 'next_beat' ? 600 : 200,
@@ -234,10 +300,10 @@ export const useAiAutocomplete = (options: AiAutocompleteOptions) => {
     const chapterIdAtStart = Number(activeChapterId.value || 0)
     const normalizeFlow = (text: string) => text.replace(/\s+/g, '')
     try {
-      let modelCode = autocompleteModelOverride.value || aiModelStore.textModel
+      let modelCode = autocompleteModelOverride.value || aiModelStore.effectiveTextModel
       if (!modelCode) {
         await aiModelStore.loadTextModels()
-        modelCode = aiModelStore.textModel
+        modelCode = aiModelStore.effectiveTextModel
       }
       if (!modelCode) {
         ElMessage.warning(NO_MODEL_MESSAGE)
@@ -245,8 +311,15 @@ export const useAiAutocomplete = (options: AiAutocompleteOptions) => {
       }
       const localPreText = extractAutocompletePrefix(context, 3, 220)
       const sceneAnchor = extractSceneTailAnchor(localPreText, 2, 160)
+      const contextBlocks = await editorContext(String(options.bookId() ?? ''), chapterIdAtStart || null, 'continue')
+      if (controller.signal.aborted || Number(activeChapterId.value || 0) !== chapterIdAtStart) return
 
-      const characterContext = await loadCharacterContext(options.bookId(), [context, activeChapterTitle.value, activeChapterSummary.value].join('\n'))
+      // 备忘与作者自己的文风范例一起附上：范例按语义从前文取，没开向量检索就没有
+      const [characterContext, notesContext, exemplars] = await Promise.all([
+        loadCharacterContext(options.bookId(), [context, activeChapterTitle.value, activeChapterSummary.value].join('\n')),
+        buildNotesContext(options.bookId()),
+        buildStyleExemplars({ bookId: options.bookId(), text: localPreText, excludeChapterId: chapterIdAtStart }),
+      ])
       if (controller.signal.aborted || activeChapterId.value !== chapterIdAtStart) return
       const startPos = from
       let insertPos = from
@@ -268,10 +341,11 @@ export const useAiAutocomplete = (options: AiAutocompleteOptions) => {
             signal: controller.signal,
             messages: buildAutocompleteMessages({
               preText: localPreText,
-              characterContext,
+              characterContext: [notesContext, characterContext, exemplars].filter(Boolean).join('\n\n'),
               sceneAnchor,
               chapterTitle: activeChapterTitle.value || '',
               chapterSummary: activeChapterSummary.value || '',
+              contextBlocks,
               mode: 'next_beat',
             }),
           },
@@ -313,9 +387,13 @@ export const useAiAutocomplete = (options: AiAutocompleteOptions) => {
         ElMessage.warning('AI 暂无返回内容')
         return
       }
+      if (accumulated) onAiSpanInserted?.(accumulated)
       if (!interrupted && accumulated && Number(activeChapterId.value || 0) === chapterIdAtStart) {
         ed.chain().focus().setTextSelection(Math.min(insertPos, ed.state.doc.content.size)).run()
         onDraftDirty()
+        if (aiConfig.value.verify && !errored && accumulated.trim().length >= 80) {
+          void guardContinuation({ ed, from: startPos, to: insertPos, text: accumulated, preText: localPreText, chapterIdAtStart, modelCode })
+        }
       }
     } finally {
       setAiBusy(false)

@@ -1,4 +1,4 @@
-import { PROMPT_FILE_DEFS, findPromptFileDef, type PromptFileDef } from '@/config/prompts'
+import { PROMPT_FILE_DEFS, findPromptFileDef, type PromptFileDef, type PromptSlotDef } from '@/config/prompts'
 import { LEGACY_PROMPT_TEXT_HASHES, hashPromptText } from '@/config/prompts/legacy-defaults'
 import { isTauriRuntime } from '@/storage'
 
@@ -11,6 +11,9 @@ import { isTauriRuntime } from '@/storage'
  * - 网页端（开发/预览）：没有文件系统，md 内容存 IndexedDB，格式与文件一致。
  * - 运行时：全部文本进内存缓存，组装器同步读取（initLocalPrompts 在挂载前完成）。
  * - 空槽位回退默认值：用户把某段删空不会把空提示词发给模型。
+ * - 默认值换代：没改过的段按旧版指纹（legacy-defaults）自动升级并回写文件；
+ *   改过的段保留用户文本，frontmatter 的 base 记着编辑时依据的默认值指纹，
+ *   默认值变了就在界面上提示"默认值已更新"，由用户决定对比或采用。
  */
 
 const DB_NAME = 'ew-local-prompts'
@@ -18,10 +21,18 @@ const STORE_NAME = 'files'
 
 type SlotTexts = Record<string, string>
 type SlotTemps = Record<string, number>
+/** 槽 key → 编辑时依据的默认值指纹 */
+type SlotBases = Record<string, string>
 
 const cache = new Map<string, SlotTexts>()
 const tempCache = new Map<string, SlotTemps>()
+const baseCache = new Map<string, SlotBases>()
 let initialized = false
+
+/** 当前代码默认值的指纹（与 legacy 指纹同一算法） */
+const defaultHash = (slot: PromptSlotDef) => hashPromptText(slot.defaultText.trim())
+const currentBases = (def: PromptFileDef): SlotBases =>
+  Object.fromEntries(def.slots.map(slot => [slot.key, defaultHash(slot)]))
 
 /** 温度钳制到合法区间；非数字返回 undefined */
 const normalizeTemperature = (value: unknown): number | undefined => {
@@ -34,10 +45,18 @@ const normalizeTemperature = (value: unknown): number | undefined => {
 // md 序列化 / 解析（格式：frontmatter 记 id，正文按 "## 槽名" 分段）
 // ---------------------------------------------------------------------------
 
-export const serializePromptFile = (def: PromptFileDef, slots: SlotTexts = {}, temps: SlotTemps = {}): string => {
+export const serializePromptFile = (
+  def: PromptFileDef,
+  slots: SlotTexts = {},
+  temps: SlotTemps = {},
+  bases: SlotBases = {}
+): string => {
+  const baseLine = def.slots.map(slot => `${slot.key}=${bases[slot.key] || defaultHash(slot)}`).join(' ')
   const lines: string[] = [
     '---',
     `id: ${def.id}`,
+    '# base 是各段编辑时依据的默认值指纹，程序据此判断默认值是否已更新；请勿手改',
+    `base: ${baseLine}`,
     '---',
     '',
     `> ${def.name} —— ${def.description}`,
@@ -61,11 +80,23 @@ export const serializePromptFile = (def: PromptFileDef, slots: SlotTexts = {}, t
   return lines.join('\n')
 }
 
-export const parsePromptFile = (raw: string): { id: string; sections: Record<string, string> } | null => {
+export const parsePromptFile = (
+  raw: string
+): { id: string; sections: Record<string, string>; bases: SlotBases | null } | null => {
   const text = String(raw || '')
   const frontmatter = text.match(/^---\s*\n([\s\S]*?)\n---/)
   const id = frontmatter?.[1].match(/(?:^|\n)id:\s*([\w-]+)/)?.[1] || ''
   if (!id) return null
+  // base 行缺失（本功能之前生成的文件）返回 null，装载时按当前默认值补齐
+  const baseLine = frontmatter?.[1].match(/(?:^|\n)base:\s*(.+)/)?.[1] || ''
+  const bases: SlotBases | null = baseLine
+    ? Object.fromEntries(
+        baseLine
+          .split(/\s+/)
+          .map(pair => pair.split('='))
+          .filter(pair => pair.length === 2 && pair[0] && pair[1])
+      )
+    : null
   const sections: Record<string, string> = {}
   const matches = [...text.matchAll(/^## (.+)$/gm)]
   for (let index = 0; index < matches.length; index += 1) {
@@ -74,7 +105,7 @@ export const parsePromptFile = (raw: string): { id: string; sections: Record<str
     const end = index + 1 < matches.length ? matches[index + 1].index! : text.length
     sections[label] = text.slice(start, end).trim()
   }
-  return { id, sections }
+  return { id, sections, bases }
 }
 
 /** 解析出的分段（按槽名）映射回槽 key；未知段名忽略，缺失段回默认。
@@ -82,9 +113,10 @@ export const parsePromptFile = (raw: string): { id: string; sections: Record<str
 const sectionsToSlots = (
   def: PromptFileDef,
   sections: Record<string, string>
-): { texts: SlotTexts; temps: SlotTemps } => {
+): { texts: SlotTexts; temps: SlotTemps; upgraded: string[] } => {
   const texts: SlotTexts = {}
   const temps: SlotTemps = {}
+  const upgraded: string[] = []
   for (const slot of def.slots) {
     let text = String(sections[slot.label] ?? '').trim()
     const tempMatch = text.match(/^温度[:：]\s*([\d.]+)\s*\n?/)
@@ -94,16 +126,34 @@ const sectionsToSlots = (
       text = text.slice(tempMatch[0].length).trim()
     }
     // 旧版默认值原样躺在文件里（用户没改过）→ 自动升级为新默认值
-    if (text && LEGACY_PROMPT_TEXT_HASHES.has(hashPromptText(text))) text = ''
+    if (text && LEGACY_PROMPT_TEXT_HASHES.has(hashPromptText(text))) {
+      text = ''
+      upgraded.push(slot.key)
+    }
     texts[slot.key] = text || slot.defaultText
   }
-  return { texts, temps }
+  return { texts, temps, upgraded }
 }
 
-const applyParsed = (def: PromptFileDef, sections: Record<string, string>) => {
-  const { texts, temps } = sectionsToSlots(def, sections)
+/**
+ * 把解析结果装进缓存，并算出文件该写回的内容：
+ * - 有段按旧版指纹升级了，或文件还没有 base 行 → 需要回写，让磁盘与内存一致；
+ * - 升级过的段 base 改为当前默认指纹；其余段沿用文件里的 base，缺失的按当前默认补。
+ */
+const applyParsed = (
+  def: PromptFileDef,
+  sections: Record<string, string>,
+  bases: SlotBases | null = null
+): { rewrite: string | null } => {
+  const { texts, temps, upgraded } = sectionsToSlots(def, sections)
+  const current = currentBases(def)
+  const merged: SlotBases = { ...current, ...(bases || {}) }
+  for (const key of upgraded) merged[key] = current[key]
   cache.set(def.id, texts)
   tempCache.set(def.id, temps)
+  baseCache.set(def.id, merged)
+  const needRewrite = upgraded.length > 0 || bases === null
+  return { rewrite: needRewrite ? serializePromptFile(def, texts, temps, merged) : null }
 }
 
 // ---------------------------------------------------------------------------
@@ -139,18 +189,26 @@ const fileNameOf = (def: PromptFileDef) => `${def.name}.md`
 const loadFromDesktop = async () => {
   const { invoke } = await import('@tauri-apps/api/core')
   const documents = await invoke<Array<{ fileName: string; content: string }>>('list_prompt_documents')
-  const parsedById = new Map<string, Record<string, string>>()
+  const parsedById = new Map<string, { sections: Record<string, string>; bases: SlotBases | null }>()
   for (const doc of documents) {
     const parsed = parsePromptFile(doc.content)
-    if (parsed) parsedById.set(parsed.id, parsed.sections)
+    if (parsed) parsedById.set(parsed.id, { sections: parsed.sections, bases: parsed.bases })
   }
   for (const def of PROMPT_FILE_DEFS) {
-    const sections = parsedById.get(def.id)
-    if (sections) {
-      applyParsed(def, sections)
+    const parsed = parsedById.get(def.id)
+    if (parsed) {
+      const { rewrite } = applyParsed(def, parsed.sections, parsed.bases)
+      if (rewrite) {
+        // 段落按旧版指纹升级、或补齐 base 指纹：回写文件，让用户打开 md 看到的就是生效的内容
+        try {
+          await invoke('write_prompt_document', { fileName: fileNameOf(def), content: rewrite })
+        } catch (error) {
+          console.warn(`「${def.name}」升级后的提示词文件回写失败，本次仅在内存中生效`, error)
+        }
+      }
     } else {
       // 仅创建缺失文件，不覆盖无法识别的原文件；单组失败不影响其他组。
-      applyParsed(def, {})
+      applyParsed(def, {}, currentBases(def))
       try {
         const created = await invoke<boolean>('ensure_prompt_document', {
           fileName: fileNameOf(def),
@@ -168,7 +226,12 @@ const loadFromWeb = async () => {
   for (const def of PROMPT_FILE_DEFS) {
     const stored = await withIdb<unknown>('readonly', store => store.get(def.id))
     const parsed = typeof stored === 'string' ? parsePromptFile(stored) : null
-    applyParsed(def, parsed?.sections || {})
+    if (!parsed) {
+      applyParsed(def, {}, currentBases(def))
+      continue
+    }
+    const { rewrite } = applyParsed(def, parsed.sections, parsed.bases)
+    if (rewrite) await withIdb('readwrite', store => store.put(rewrite, def.id))
   }
 }
 
@@ -181,7 +244,7 @@ export const initLocalPrompts = async () => {
   } catch (error) {
     // 保留已加载的自定义内容，仅为未加载的组补默认值。
     console.warn('提示词库装载失败，使用内置默认值', error)
-    for (const def of PROMPT_FILE_DEFS) if (!cache.has(def.id)) applyParsed(def, {})
+    for (const def of PROMPT_FILE_DEFS) if (!cache.has(def.id)) applyParsed(def, {}, currentBases(def))
   }
   initialized = true
 }
@@ -198,7 +261,8 @@ export const saveLocalPromptFile = async (fileId: string, slots: SlotTexts, temp
       normalizedTemps[slot.key] = normalizeTemperature(temps[slot.key]) ?? slot.defaultTemperature
     }
   }
-  const content = serializePromptFile(def, normalized, normalizedTemps)
+  const bases = currentBases(def)
+  const content = serializePromptFile(def, normalized, normalizedTemps, bases)
   if (isTauriRuntime()) {
     const { invoke } = await import('@tauri-apps/api/core')
     await invoke('write_prompt_document', { fileName: fileNameOf(def), content })
@@ -207,6 +271,7 @@ export const saveLocalPromptFile = async (fileId: string, slots: SlotTexts, temp
   }
   cache.set(def.id, normalized)
   tempCache.set(def.id, normalizedTemps)
+  baseCache.set(def.id, bases)
   return normalized
 }
 
@@ -280,6 +345,22 @@ export const getLocalPromptSlots = (fileId: string): SlotTexts => {
   const slots: SlotTexts = {}
   for (const slot of def.slots) slots[slot.key] = current[slot.key] || slot.defaultText
   return slots
+}
+
+/**
+ * 某场景里"用户改过、且内置默认值之后又更新了"的槽：界面上标"默认值已更新"，
+ * 让用户决定对比合并还是采用新版。没改过的段会自动升级，不在此列。
+ */
+export const getPromptDefaultUpdates = (fileId: string): string[] => {
+  const def = findPromptFileDef(fileId)
+  if (!def) return []
+  const current = cache.get(fileId)
+  const bases = baseCache.get(fileId)
+  if (!current || !bases) return []
+  return def.slots
+    .filter(slot => (current[slot.key] || slot.defaultText) !== slot.defaultText)
+    .filter(slot => bases[slot.key] && bases[slot.key] !== defaultHash(slot))
+    .map(slot => slot.key)
 }
 
 /** 某场景是否有槽位偏离默认值（界面上标"已修改"） */

@@ -1,3 +1,4 @@
+import { ENTITY_HIGHLIGHT_DISMISS_STORAGE_KEY, mergeDismissedEntityHighlights } from '@/utils/entity-highlight-preferences'
 import { usesUnifiedStorage, STORAGE_MODE_KEY } from './storage-mode'
 import { encodeImportedBookAssets, decodeBookAssets, prepareBackupBook } from './book-assets'
 import { desktopInvoke, decodeDesktopValue, encodeRecords, type PersistedStore } from './desktop-records'
@@ -17,7 +18,7 @@ import { appSettings, flushAppSettings, SETTINGS_NAMESPACE } from '@/storage/app
  *   fonts.json + fonts/  导入的自定义字体
  *   idb/<name>.json      IndexedDB 各库（参考资料、工作流、妙笔对话、AI 记录、拆书、生图、背景图、榜单缓存），
  *   idb-blobs/           其中的 Blob 字段（生图）拆出的二进制条目；见 full-backup-idb.ts
- *   prompts/             提示词文档（Rust 侧直接从 Documents/易创提示词 进出）
+ *   prompts/             提示词文档及完整技能包（Rust 侧从 Documents/易创提示词 进出）
  *
  * 恢复两种模式：
  *   overwrite  先清空再写入，工作台整体回到备份时的状态（可先自动做一次安全备份）
@@ -124,7 +125,6 @@ const SETTINGS_KEYS = new Set([
   'ew-writing-editor',
   'ew-writing-plan',
   'ew-workflow-rail-panel-width',
-  'ew-writing-entity-highlight-dismissed',
 ])
 const AI_MODELS_KEY = 'ew-local-ai-models'
 const WRITE_STATS_KEY = 'ew-local-write-stats'
@@ -193,6 +193,8 @@ export interface IdRemap {
   chatSessions: Map<number, number>
   images: Map<number, number>
   referenceEntities: Map<string, Map<number, number>>
+  agentIds: Map<string, string>
+  skillIds: Map<string, string>
 }
 
 export const emptyIdRemap = (): IdRemap => ({
@@ -205,6 +207,8 @@ export const emptyIdRemap = (): IdRemap => ({
   chatSessions: new Map(),
   images: new Map(),
   referenceEntities: new Map(),
+  agentIds: new Map(),
+  skillIds: new Map(),
 })
 
 export const collectLibraryIds = (dump: LocalLibraryDump) => {
@@ -404,6 +408,10 @@ export const mergeLocalStorage = (
   const next = { ...current }
   for (const [key, raw] of Object.entries(backup)) {
     if (LOCAL_STORAGE_SKIP.has(key)) continue
+    if (key === ENTITY_HIGHLIGHT_DISMISS_STORAGE_KEY) {
+      next[key] = mergeDismissedEntityHighlights(current[key], raw, id => mapIdString(remap.books, id))
+      continue
+    }
     if (!(key in current)) {
       next[key] = remapLocalStorageValue(key, raw, remap)
       continue
@@ -633,6 +641,10 @@ export async function applyFullBackup(
   options: { safetyBackupPath?: string; onProgress?: (text: string) => void } = {}
 ): Promise<FullRestoreReport> {
   if (hasLiveLocalTasks()) throw new Error('还有生成任务在运行，请先停止任务再恢复备份')
+  if (isTauriRuntime()) {
+    const state = await desktopInvoke<{ active: boolean }>('agent_workspace', { action: 'activity', args: {} })
+    if (state.active) throw new Error('还有 Agent 任务在运行，请先停止任务再恢复备份')
+  }
   await flushAppSettings()
   const { getLocalBackupService } = await import('./local-backup-service')
   if (!await getLocalBackupService().snapshotActiveWritingEditor(4000,true)) throw new Error('当前编辑内容尚未保存，已停止恢复')
@@ -643,11 +655,15 @@ export async function applyFullBackup(
   await getWritingStorage().getLocalWritingSettings()
   await beginStorageMaintenance()
   try {
+    await desktopInvoke('agent_workspace', { action: 'maintenance', args: {} })
     const result = await performFullBackup(inspection,mode,options)
     // Keep writers blocked until restart: in-memory editor/workflow state belongs to the old DB.
     return result
   } catch (error) {
-    if (!(error instanceof RestoreRestartRequiredError)) endStorageMaintenance()
+    if (!(error instanceof RestoreRestartRequiredError)) {
+      endStorageMaintenance()
+      await desktopInvoke('agent_workspace', { action: 'end_maintenance', args: {} })
+    }
     throw error
   }
 }
@@ -778,7 +794,7 @@ async function performFullBackup(
       prompts = await desktopInvoke<number>('desktop_restore_apply',{
 
       statements:[...libraryImportStatements(storedLibrary,mode==='overwrite'),...writingImportStatements(writingDump,mode==='overwrite')],
-      stores,replace:mode==='overwrite',session,mode,legacyBase,
+      stores,replace:mode==='overwrite',session,mode,legacyBase,skillIds:Object.fromEntries(remap.skillIds),
       })
     } catch (error) { throw new RestoreRestartRequiredError(error) }
     await closeFullBackup(session)

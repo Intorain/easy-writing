@@ -8,6 +8,8 @@ export interface BreakdownProjectSummary {
   characterCount: number
   wordCount: number
   chapterCount: number
+  /** Agent 章节卡覆盖，与旧版逐段分析分开统计。 */
+  agentIndexedChapters?: number
   progress: number
   status: 'wait' | 'done' | 'processing' | 'failed'
   updateTime: string

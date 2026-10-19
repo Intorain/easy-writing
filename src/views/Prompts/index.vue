@@ -28,6 +28,7 @@
             <span class="prompt-file-name">
               {{ def.name }}
               <em v-if="modifiedIds.has(def.id)" class="prompt-modified-badge">已修改</em>
+              <em v-if="updatedSlots[def.id]?.length" class="prompt-updated-badge">默认值已更新</em>
             </span>
             <span class="prompt-file-desc">{{ def.description }}</span>
             <i class="fa-solid" :class="expandedId === def.id ? 'fa-angle-up' : 'fa-angle-down'"></i>
@@ -37,6 +38,15 @@
             <div v-for="slot in def.slots" :key="slot.key" class="prompt-slot">
               <div class="prompt-slot-head">
                 <span class="prompt-slot-label">{{ slot.label }}</span>
+                <button
+                  v-if="updatedSlots[def.id]?.includes(slot.key)"
+                  class="prompt-slot-updated"
+                  type="button"
+                  title="这一段是你改过的版本；内置默认值随新版本更新了，点击对比"
+                  @click="openEditor(def, slot, true)"
+                >
+                  <i class="fa-solid fa-circle-up"></i> 默认值已更新，对比新版
+                </button>
                 <span v-if="slot.variables?.length" class="prompt-slot-vars">
                   变量：<code v-for="name in slot.variables" :key="name">{{ wrapVar(name) }}</code>
                 </span>
@@ -74,6 +84,26 @@
       </div>
     </section>
 
+    <section class="prompt-group fusion-card">
+      <div class="prompt-group-title">
+        <i class="fa-solid fa-puzzle-piece"></i>
+        <strong>网文技能</strong>
+      </div>
+      <div class="prompt-file-list">
+        <div class="prompt-file">
+          <button class="prompt-file-head" type="button" @click="router.push('/agent-creation/skills')">
+            <span class="prompt-file-name">Agent 创作技能</span>
+            <span class="prompt-file-desc">
+              开书定位、黄金三章、章节写作、去 AI 味等写作方法在 Agent 的 Skills 页查看、修改与恢复默认{{
+                desktopSupported ? '；也可以在上面目录的 skills/技能名/SKILL.md 放同名文件覆盖内置版本' : ''
+              }}
+            </span>
+            <i class="fa-solid fa-arrow-right"></i>
+          </button>
+        </div>
+      </div>
+    </section>
+
     <EwModal
       v-model:visible="editorVisible"
       :title="editorTitle"
@@ -85,7 +115,19 @@
           变量：<code v-for="name in editorSlot.variables" :key="name">{{ wrapVar(name) }}</code>
           <span>程序运行时代入，请保留。</span>
         </p>
-        <textarea v-model="editorText" class="prompt-editor-input" spellcheck="false"></textarea>
+        <div class="prompt-editor-panes" :class="{ 'is-compare': editorCompare }">
+          <div class="prompt-editor-pane">
+            <div v-if="editorCompare" class="prompt-editor-pane-title">你的版本</div>
+            <textarea v-model="editorText" class="prompt-editor-input" spellcheck="false"></textarea>
+          </div>
+          <div v-if="editorCompare" class="prompt-editor-pane">
+            <div class="prompt-editor-pane-title">
+              新版默认值
+              <button class="ink-btn ink-btn-outline ink-btn-sm" type="button" @click="adoptDefault">用新版替换左侧</button>
+            </div>
+            <pre class="prompt-editor-default">{{ editorSlot?.defaultText }}</pre>
+          </div>
+        </div>
       </div>
       <template #footer>
         <button class="ink-btn ink-btn-outline" type="button" @click="editorVisible = false">取消</button>
@@ -99,6 +141,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import EwModal from '@/components/EwModal/index.vue'
 import { inkConfirm } from '@/utils/ink-confirm'
@@ -106,6 +149,7 @@ import { PROMPT_FILE_DEFS, type PromptFileDef, type PromptSlotDef } from '@/conf
 import {
   getLocalPromptSlots,
   getLocalPromptTemps,
+  getPromptDefaultUpdates,
   getPromptDirPath,
   isPromptFileModified,
   openPromptDir,
@@ -115,17 +159,22 @@ import {
 import { isTauriRuntime } from '@/storage'
 
 const desktopSupported = isTauriRuntime()
+const router = useRouter()
 const promptDir = ref('')
 const expandedId = ref('')
 const saving = ref(false)
 const draftSlots = reactive<Record<string, string>>({})
 const draftTemps = reactive<Record<string, number>>({})
 const modifiedIds = ref(new Set<string>())
+/** 文件 id → 用户改过、但内置默认值之后更新了的槽 key */
+const updatedSlots = ref<Record<string, string[]>>({})
 
 const editorVisible = ref(false)
 const editorDef = ref<PromptFileDef | null>(null)
 const editorSlot = ref<PromptSlotDef | null>(null)
 const editorText = ref('')
+/** 对比模式：右侧并排显示新版默认值 */
+const editorCompare = ref(false)
 const editorTitle = computed(() =>
   editorDef.value && editorSlot.value ? `${editorDef.value.name} · ${editorSlot.value.label}` : ''
 )
@@ -149,6 +198,12 @@ const formatTemp = (value?: number) =>
 
 const refreshModified = () => {
   modifiedIds.value = new Set(PROMPT_FILE_DEFS.filter(def => isPromptFileModified(def.id)).map(def => def.id))
+  const updated: Record<string, string[]> = {}
+  for (const def of PROMPT_FILE_DEFS) {
+    const keys = getPromptDefaultUpdates(def.id)
+    if (keys.length) updated[def.id] = keys
+  }
+  updatedSlots.value = updated
 }
 
 const loadDrafts = (fileId: string) => {
@@ -187,11 +242,17 @@ const handleTempChange = (def: PromptFileDef) => {
   void persistFile(def, `「${def.name}」温度已保存，立即生效`)
 }
 
-const openEditor = (def: PromptFileDef, slot: PromptSlotDef) => {
+const openEditor = (def: PromptFileDef, slot: PromptSlotDef, compare = false) => {
   editorDef.value = def
   editorSlot.value = slot
   editorText.value = draftSlots[slot.key] || ''
+  editorCompare.value = compare
   editorVisible.value = true
+}
+
+/** 对比模式里一键采用新版默认值；保存后这一段就跟回默认，提示自动消失 */
+const adoptDefault = () => {
+  if (editorSlot.value) editorText.value = editorSlot.value.defaultText
 }
 
 const handleEditorSave = async () => {
@@ -336,11 +397,16 @@ onMounted(() => {
     white-space: nowrap;
   }
 
-  .prompt-modified-badge {
+  .prompt-modified-badge,
+  .prompt-updated-badge {
     font-style: normal;
     font-size: 11px;
     color: var(--ink-accent);
     margin-left: 6px;
+  }
+
+  .prompt-updated-badge {
+    color: var(--state-warning, var(--ink-accent));
   }
 
   .prompt-file-desc {
@@ -375,6 +441,23 @@ onMounted(() => {
     font-size: 13px;
     font-weight: 600;
     color: var(--ink-main);
+  }
+
+  .prompt-slot-updated {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 8px;
+    border: 1px solid var(--state-warning, var(--ink-accent));
+    border-radius: 999px;
+    background: transparent;
+    color: var(--state-warning, var(--ink-accent));
+    font-size: 11px;
+    cursor: pointer;
+
+    &:hover {
+      background: var(--bg-hover);
+    }
   }
 
   .prompt-slot-temp {
@@ -484,6 +567,49 @@ onMounted(() => {
   span {
     margin-left: 6px;
   }
+}
+
+.prompt-editor-panes {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+
+  &.is-compare {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.prompt-editor-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.prompt-editor-pane-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-sec);
+}
+
+.prompt-editor-default {
+  margin: 0;
+  height: 56vh;
+  overflow: auto;
+  padding: 10px 12px;
+  border: 1px dashed var(--btn-ghost-border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--ink-main);
+  font-size: 13px;
+  line-height: 1.8;
+  font-family: inherit;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .prompt-editor-input {

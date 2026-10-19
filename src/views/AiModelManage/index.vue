@@ -20,12 +20,7 @@ import AiModelSettingsPane from '@/views/Writing/components/AiModelSettingsPane.
   gap: 20px;
 }
 
-:deep(.ai-model-settings.page-mode .provider-grid) {
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-}
-
-:deep(.ai-model-settings.page-mode .model-card),
-:deep(.ai-model-settings.page-mode .provider-card) {
+:deep(.ai-model-settings.page-mode .model-card) {
   border-radius: 8px;
 }
 

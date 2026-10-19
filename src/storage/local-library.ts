@@ -1,5 +1,6 @@
 import { getWritingStorage } from '@/storage'
 import { usesSqliteCore } from './storage-mode'
+import { isTauriRuntime } from './writing-storage'
 import { saveBlobFile } from '@/utils/download'
 import { IndexedDbLocalLibraryStorage } from './indexeddb-local-library'
 import { SqliteLocalLibraryStorage } from './sqlite-local-library'
@@ -11,6 +12,8 @@ import type {
   LocalParsedBook,
 } from './local-library-types'
 import {
+  repairChapterOrder,
+  nextSortNo,
   buildLocalExportPayload,
   buildLocalTxtExport,
   createLocalImportPreview,
@@ -241,6 +244,20 @@ export const importLocalChaptersFromPreview = async (
   if (!book) throw new Error('本地作品不存在')
   const tree = await library.getLocalBookTree(book.id)
 
+  // 新建书自带的壳（只有一个卷、卷里只有空章）：导入的第一卷直接住进这个卷——改卷名、清掉空章，不另开一卷。
+  // 与书架"导入作品"的结果一致：导入完目录里只有 txt 的卷章，没有多出来的空卷空章。
+  const [firstVolume] = parsed.volumes
+  const isEmptyShell = tree.length === 1 && tree[0].children.every(chapter =>
+    !Number(chapter.wordCount) && !Number(chapter.textWordCount) && !String(chapter.summary || '').trim())
+  if (firstVolume && isEmptyShell) {
+    const home = tree[0]
+    const title = firstVolume.title || '第一卷'
+    if (home.children.length) await library.deleteLocalChapter(home.children.map(chapter => chapter.id))
+    if (home.title !== title) await library.updateLocalVolume({ id: home.id, title })
+    home.title = title
+    home.children = []
+  }
+
   let addedVolumes = 0
   let addedChapters = 0
   let addedWordCount = 0
@@ -250,7 +267,8 @@ export const importLocalChaptersFromPreview = async (
   for (const volumePayload of parsed.volumes) {
     const title = volumePayload.title || '第一卷'
     let target = tree.find(volume => volume.title === title)
-    let nextSortNo = target ? target.children.length : 0
+    // 接在该卷现有序号之后；按数量接会和没编号 / 自定义序号的章撞号
+    let cursor = target ? nextSortNo(target.children) - 1 : 0
     if (!target) {
       const created = await library.createLocalVolume({
         bookId: book.id,
@@ -260,17 +278,17 @@ export const importLocalChaptersFromPreview = async (
       })
       addedVolumes += 1
       target = { ...created, children: [] }
-      nextSortNo = 0
+      cursor = 0
     }
     for (const chapterPayload of volumePayload.chapters) {
-      nextSortNo += 1
+      cursor += 1
       const textContent = chapterPayload.textContent || ''
       const chapter = await library.createLocalChapter({
         bookId: book.id,
         volumeId: target.id,
-        title: chapterPayload.title || `第${nextSortNo}章`,
+        title: chapterPayload.title || `第${cursor}章`,
         summary: chapterPayload.summary || '',
-        sortNo: nextSortNo,
+        sortNo: cursor,
       })
       const wordCount = countWords(textContent)
       await writingStorage.saveChapterLocal({
@@ -355,7 +373,28 @@ export const purgeLocalBookCompletely = async (bookId: number | string) => {
   const { data: sessions } = await listLocalChatSessions({ bookId: String(bookId) })
   if (sessions.length) await deleteLocalChatSessions({ ids: sessions.map(session => session.id) })
   await storage.purgeLocalBook([Number(bookId)])
+  // Agent 板块：这本书的妙笔会话一起删，只是引用过它的对话摘掉引用；网页端没有宿主
+  if (isTauriRuntime()) {
+    const { agentCommand } = await import('@/agent/client')
+    await agentCommand('book_purged', { bookId: String(bookId) }).catch(error => console.warn('清理作品会话失败', error))
+  }
 }
 
 export { isLocalEntityId, LOCAL_USER_ID }
 export type * from './local-library-types'
+
+/**
+ * 进书时修一次旧数据：早先从侧边栏新建的章没有序号（0），会排到导入的章前面。
+ * 按 repairChapterOrder 的规则重排并写回序号；不改章节与书的修改时间。返回修过的卷数。
+ */
+export const repairLocalChapterOrder = async (bookId: number | string) => {
+  const library = getLocalLibraryStorage()
+  let repaired = 0
+  for (const volume of await library.getLocalBookTree(bookId)) {
+    const order = repairChapterOrder(volume.children)
+    if (!order) continue
+    await library.sortLocalChapters({ volumeId: volume.id, chapterIds: order }, { keepTime: true })
+    repaired += 1
+  }
+  return repaired
+}

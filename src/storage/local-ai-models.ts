@@ -1,6 +1,6 @@
 import { appSettings, flushAppSettings } from '@/storage/app-settings'
 import type { AiModelGroupCode, AiModelOption } from '@/types/ai-model'
-import type { AiThinkingMode, UserAiModelSavePayload } from '@/types/user-ai-model'
+import type { AiThinkingMode, UserAiModelSavePayload, UserAiModelScene } from '@/types/user-ai-model'
 import { createLocalEntityId, nowIso } from './local-library-utils'
 
 /**
@@ -15,7 +15,7 @@ import { createLocalEntityId, nowIso } from './local-library-utils'
 export interface LocalAiModel {
   id: number
   name: string
-  scene: 'text' | 'image'
+  scene: UserAiModelScene
   provider: string
   protocol: 'openai_compatible'
   modelCode: string
@@ -208,8 +208,17 @@ export const getLocalAiModelDisplayName = (code: string): string => {
   return model ? String(model.name || model.modelCode || '') : ''
 }
 
-export const sceneOfGroup = (groupCode: AiModelGroupCode): 'text' | 'image' =>
-  groupCode === 'image_generation' ? 'image' : 'text'
+export const sceneOfGroup = (groupCode: AiModelGroupCode): UserAiModelScene =>
+  groupCode === 'image_generation' ? 'image' : groupCode === 'embedding' ? 'embedding' : 'text'
+
+/**
+ * 某用途下第一个启用的模型 code：分组没选默认时的自动兜底（按列表顺序取）。
+ * 这样用户加完模型不用再去"默认模型"里点一遍，AI 功能就能用。
+ */
+export const resolveLocalAiFallbackModel = (scene: UserAiModelScene): string => {
+  const model = sortModels(loadStore().models).find(item => item.scene === scene && item.status !== 0)
+  return model ? localAiModelCode(model.id) : ''
+}
 
 export const getLocalAiPreference = (groupCode: AiModelGroupCode): string => {
   return loadStore().preferences[groupCode] || ''

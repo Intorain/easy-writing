@@ -41,6 +41,35 @@
           <i class="fa-solid fa-check"></i>
           <span>纠错</span>
         </button>
+        <button type="button" :class="{ active: activeAiAction === 'deai' }" @click="handleAction('deai')">
+          <i class="fa-solid fa-user-pen"></i>
+          <span>去AI味</span>
+        </button>
+        <button
+          type="button"
+          :class="{ active: activeAiAction === 'voice' || voicePicking }"
+          title="按人物资料里的语言指纹改写这个人物的台词"
+          @click="toggleVoicePicker"
+        >
+          <i class="fa-solid fa-masks-theater"></i>
+          <span>按人物口吻</span>
+        </button>
+      </div>
+      <div v-if="voicePicking" class="voice-picker">
+        <p v-if="voiceLoading" class="voice-hint">正在读取人物资料…</p>
+        <p v-else-if="!voiceCharacters.length" class="voice-hint">这本书还没有人物资料，先到“人物”里建一个。</p>
+        <template v-else>
+          <button
+            v-for="character in voiceCharacters"
+            :key="character.id"
+            type="button"
+            class="voice-option"
+            :title="character.voice ? character.voice : '未填写语言指纹，将按上下文推断'"
+            @click="handleVoice(character)"
+          >
+            {{ character.name }}<small v-if="!character.voice">（无指纹）</small>
+          </button>
+        </template>
       </div>
       <div class="custom-input">
         <input
@@ -72,6 +101,10 @@
     <div v-if="!isLoading && activePanel === 'more'" class="expand-panel more-panel">
       <button type="button" @click="emit('add-to-word-library')">
         <i class="fa-solid fa-spell-check"></i><span>加入常用词</span>
+      </button>
+      <button type="button" title="带着这段原文开一个 Agent 对话" @click="askAgent">
+        <i class="fa-solid fa-robot"></i>
+        <span>问 Agent</span>
       </button>
       <button type="button" @click="addSelectionToInspiration">
         <i class="fa-regular fa-lightbulb"></i>
@@ -109,7 +142,12 @@ import { streamLocalChatCompletion, NO_MODEL_MESSAGE } from '@/utils/local-ai-cl
 import { buildSelectionActionMessages, selectionActionTemperature, type SelectionActionType } from '@/config/ai-prompts'
 import { useAiModelStore } from '@/stores/ai-model'
 import { addLocalInspiration } from '@/storage/local-inspiration'
+import { listLocalCharacters } from '@/storage/local-reference'
+import type { Character } from '@/types'
 import { ElMessage } from 'element-plus'
+import { useRouter } from 'vue-router'
+import { isTauriRuntime } from '@/storage/writing-storage'
+import { useAgentWorkspace } from '@/views/AgentCreation/use-agent-workspace'
 
 // 定义 Emits，把结果抛给父组件处理
 const emit = defineEmits<{
@@ -133,7 +171,7 @@ const props = defineProps<{
 
 const mode = computed(() => props.mode || 'ai')
 
-type ActionType = 'polish' | 'expand' | 'fix' | 'custom'
+type ActionType = 'polish' | 'expand' | 'fix' | 'deai' | 'voice' | 'custom'
 type PanelType = 'ai' | 'binding' | 'more'
 
 const isLoading = ref(false)
@@ -152,6 +190,27 @@ watch(streamingText, () => {
 })
 const activePanel = ref<PanelType | null>(null)
 const activeAiAction = ref<ActionType | null>(null)
+// 按人物口吻：先选人物，再用其“语言指纹”字段改写选区
+const voicePicking = ref(false)
+const voiceLoading = ref(false)
+const voiceCharacters = ref<Pick<Character, 'id' | 'name' | 'voice'>[]>([])
+const toggleVoicePicker = async () => {
+  voicePicking.value = !voicePicking.value
+  if (!voicePicking.value || voiceCharacters.value.length) return
+  voiceLoading.value = true
+  try {
+    const res = await listLocalCharacters({ bookId: props.bookId })
+    voiceCharacters.value = (res.data?.list || []).map(item => ({ id: item.id, name: item.name, voice: item.voice }))
+  } catch (error) {
+    ElMessage.error(String((error as Error)?.message || error))
+  } finally {
+    voiceLoading.value = false
+  }
+}
+const handleVoice = (character: Pick<Character, 'id' | 'name' | 'voice'>) => {
+  voicePicking.value = false
+  void executeAiTask('voice', undefined, { characterName: character.name, voice: character.voice || '' })
+}
 
 const aiModelStore = useAiModelStore()
 
@@ -207,7 +266,11 @@ const copyText = async (text: string) => {
   document.body.removeChild(textarea)
 }
 
-const executeAiTask = async (action: ActionType, prompt?: string) => {
+const executeAiTask = async (
+  action: ActionType,
+  prompt?: string,
+  extra: { characterName?: string; voice?: string } = {}
+) => {
   const { from, to } = props.editor.state.selection
   const selectedText = props.editor.state.doc.textBetween(from, to, '\n')
 
@@ -228,10 +291,10 @@ const executeAiTask = async (action: ActionType, prompt?: string) => {
     return
   }
   // 划词动作用「模型管理」里的文本默认模型；组未加载时先加载一次
-  if (!aiModelStore.textModel) {
+  if (!aiModelStore.effectiveTextModel) {
     await aiModelStore.loadTextModels()
   }
-  const modelCode = aiModelStore.textModel
+  const modelCode = aiModelStore.effectiveTextModel
   if (!modelCode) {
     ElMessage.warning(NO_MODEL_MESSAGE)
     return
@@ -252,7 +315,7 @@ const executeAiTask = async (action: ActionType, prompt?: string) => {
       void streamLocalChatCompletion(
         {
           scene: 'selection_action',
-          sceneLabel: '划词工具',
+          sceneLabel: action === 'deai' ? '去AI味' : action === 'voice' ? '按人物口吻' : '划词工具',
           modelCode,
           temperature: selectionActionTemperature(action as SelectionActionType),
           messages: buildSelectionActionMessages({
@@ -262,7 +325,9 @@ const executeAiTask = async (action: ActionType, prompt?: string) => {
             instruction,
             chapterTitle: props.chapterTitle || '',
             chapterSummary: props.chapterSummary || '',
-            sceneAnchor: extractSceneTailAnchor(props.editor.getText())
+            sceneAnchor: extractSceneTailAnchor(props.editor.getText()),
+            characterName: extra.characterName,
+            voice: extra.voice
           }),
           signal: controller.signal
         },
@@ -387,6 +452,37 @@ const handleAddToChat = () => {
     range
   })
   activePanel.value = null
+}
+
+const router = useRouter()
+/** 选中的原文作为引用开一个新的 Agent 对话；引用同时授权 Agent 读取本书 */
+const askAgent = async () => {
+  const selectedText = getSelectionText().trim()
+  if (!selectedText) {
+    ElMessage.warning('请先选中一段正文')
+    return
+  }
+  if (!isTauriRuntime()) {
+    ElMessage.warning('Agent 需要在桌面客户端使用')
+    return
+  }
+  if (selectedText.length > 20000) {
+    ElMessage.warning('选中的文字过长，请分段引用')
+    return
+  }
+  const agent = useAgentWorkspace()
+  agent.newConversation()
+  agent.addReference({
+    id: `selection-${crypto.randomUUID()}`,
+    kind: 'selection',
+    bookId: String(props.bookId),
+    chapterId: props.chapterId ? String(props.chapterId) : undefined,
+    title: `${props.chapterTitle ? `《${props.chapterTitle}》` : ''}选段`,
+    description: selectedText.length > 24 ? `${selectedText.slice(0, 24)}…` : selectedText,
+    content: selectedText
+  })
+  activePanel.value = null
+  await router.push('/agent-creation')
 }
 
 const addSelectionToInspiration = async () => {
@@ -615,6 +711,33 @@ onBeforeUnmount(() => {
   }
 }
 
+.voice-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 6px 0 2px;
+}
+.voice-picker .voice-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--ink-text-secondary, #777);
+}
+.voice-picker .voice-option {
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--ink-border, #e5e2dc);
+  background: transparent;
+  font-size: 12px;
+  cursor: pointer;
+}
+.voice-picker .voice-option:hover {
+  border-color: var(--ink-primary, #8a5a2b);
+  color: var(--ink-primary, #8a5a2b);
+}
+.voice-picker .voice-option small {
+  margin-left: 2px;
+  opacity: 0.7;
+}
 .custom-input {
   height: 34px;
   display: flex;

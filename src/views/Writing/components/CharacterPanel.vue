@@ -136,6 +136,14 @@ v-if="canUndoCharacterPolish('background')" class="ai-btn undo-btn" type="button
             </div>
             <textarea v-model="currentCharacter.background" rows="6" placeholder="角色的生平经历、背景故事..." @blur="saveCurrentCharacter"></textarea>
           </div>
+
+          <div class="form-item">
+            <div class="label-row">
+              <label>语言指纹</label>
+            </div>
+            <textarea v-model="currentCharacter.voice" rows="4" placeholder="口头禅、语气、句长偏好、禁用词、代表台词；AI 写对白和审稿时会参考" @blur="saveCurrentCharacter"></textarea>
+          </div>
+
         </div>
       </div>
       <div class="detail-content empty-state" v-else>
@@ -382,6 +390,7 @@ const visibleCharacters = (folder: CharacterFolder) => {
 }
 const characterTree = ref<CharacterFolder[]>([])
 const currentCharacter = ref<CharacterCard | null>(null)
+const characterBaselines = new Map<number, Partial<Character>>()
 const activeCharacterId = ref<number | null>(null)
 
 const editingCharacterId = ref<number | null>(null)
@@ -446,10 +455,14 @@ const toCharacterCard = (character: Character): CharacterCard => ({
   personality: character.personality || '',
   background: character.background || '',
   ability: character.ability || '',
-  tags: character.tags || []
+  tags: character.tags || [],
+  aliases: character.aliases || [],
+  voice: character.voice || ''
 })
 
 const buildCharacterTree = (groups: CharacterGroup[], characters: Character[]) => {
+  characterBaselines.clear()
+  for (const item of characters) characterBaselines.set(item.id, JSON.parse(JSON.stringify(item)))
   const folderMap = new Map<string, CharacterFolder>()
   const folders: CharacterFolder[] = groups.map(group => {
     const folder: CharacterFolder = {
@@ -928,7 +941,8 @@ const handleUndoCharacterPolish = async (field: CharacterField) => {
 }
 
 const saveCurrentCharacter = async () => {
-  if (!currentCharacter.value) return true
+  if (!currentCharacter.value) return false
+  const entityId = currentCharacter.value.id
   try {
     const payload: Partial<Character> = {
       id: currentCharacter.value.id,
@@ -940,14 +954,16 @@ const saveCurrentCharacter = async () => {
       age: currentCharacter.value.age,
       appearance: currentCharacter.value.appearance,
       personality: currentCharacter.value.personality,
-      background: currentCharacter.value.background
+      background: currentCharacter.value.background,
+      voice: currentCharacter.value.voice,
     }
-    await updateCharacterApi(payload)
+    await updateCharacterApi(payload, characterBaselines.get(entityId))
+    characterBaselines.set(entityId, { ...characterBaselines.get(entityId), ...payload })
     emit('lore-updated')
     return true
   } catch (error) {
     console.error('保存角色信息失败:', error)
-    ElMessage.error('角色资料保存失败，请重试')
+    ElMessage.error(error instanceof Error ? error.message : '保存失败，当前编辑内容已保留')
     return false
   }
 }

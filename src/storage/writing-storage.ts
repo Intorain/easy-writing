@@ -35,6 +35,35 @@ export interface StoredLocalChapterDraft extends LocalChapterDraft {
   storageKey: string
 }
 
+export interface ChapterSaveOptions {
+  /** 编辑器读取正文时的本地版本；0 表示尚未创建草稿。 */
+  expectedLocalVersion?: number
+}
+
+export class ChapterVersionConflictError extends Error {
+  constructor(
+    readonly storageKey: string,
+    readonly expectedVersion: number,
+    readonly actualVersion: number | null,
+  ) {
+    super('章节已被其他操作更新，当前修改尚未保存，请先处理版本冲突')
+    this.name = 'ChapterVersionConflictError'
+  }
+}
+
+export const assertChapterVersion = (
+  storageKey: string,
+  current: StoredLocalChapterDraft | null | undefined,
+  expectedVersion: number,
+) => {
+  if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0) {
+    throw new Error('章节保存版本无效')
+  }
+  if (Number(current?.localVersion || 0) !== expectedVersion) {
+    throw new ChapterVersionConflictError(storageKey, expectedVersion, current?.localVersion ?? null)
+  }
+}
+
 export interface LocalWritingSettings {
   backupEnabled: boolean
   backupDir: string
@@ -93,7 +122,7 @@ export interface WritingStorage {
   importAllRecords(dump: WritingStorageDump, options: { replace: boolean }): Promise<void>
   getChapter(chapterId: number): Promise<StoredLocalChapterDraft | null>
   getChapterByIdentity(userId: string, bookId: string | number, chapterId: number): Promise<StoredLocalChapterDraft | null>
-  saveChapterLocal(payload: LocalChapterDraft): Promise<StoredLocalChapterDraft>
+  saveChapterLocal(payload: LocalChapterDraft, options?: ChapterSaveOptions): Promise<StoredLocalChapterDraft>
   saveChapterVersion(payload: Omit<StoredChapterVersion, 'id' | 'createdAt'> & { createdAt?: number }): Promise<void>
   listLocalChaptersForBackup(userId?: string, bookId?: string | number): Promise<StoredLocalChapterDraft[]>
   markChapterBackedUp(userId: string, bookId: string | number, chapterId: number, backupAt: number): Promise<void>
@@ -215,6 +244,9 @@ export type WritingStorageBackend = 'sqlite' | 'indexeddb'
 export const SQLITE_OPEN_RETRY_DELAYS = [0, 200, 600, 1500]
 
 export const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
+
+/** 榜单自动抓取跑完一轮：detail = { date, ok, failed, summary }；微信通知等观察者据此报信 */
+export const RANK_AUTO_CRAWLED_EVENT = 'ew-rank-auto-crawled'
 
 export const dispatchStorageEvent = (name: string, detail: Record<string, unknown>) => {
   try {

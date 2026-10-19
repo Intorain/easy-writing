@@ -80,6 +80,9 @@ import DesktopUpdateModal from '@/components/DesktopUpdateModal.vue'
 const themeStore = useThemeStore()
 const backupService = getLocalBackupService()
 const desktopShell = isTauriRuntime()
+/** 微信通道模块按需加载后的句柄；卸载时用它停监听 */
+let weixinChannel: typeof import('@/ai/channels/weixin/channel') | null = null
+let weixinChannelTimer: ReturnType<typeof setTimeout> | null = null
 let automaticUpdateTimer: ReturnType<typeof setTimeout> | null = null
 let updateCheckPromise: Promise<void> | null = null
 let manualUpdateFeedback = false
@@ -238,6 +241,23 @@ const setupDesktopCloseBackup = async () => {
       if (desktopCloseConfirmed) return
       event.preventDefault()
       desktopClosing.value = true
+
+      // 活动 Agent 由原生宿主持有。普通关窗隐藏窗口继续运行，Cmd-Q 由宿主先停止并保存。
+      try {
+        const { useAgentWorkspace } = await import('@/views/AgentCreation/use-agent-workspace')
+        await useAgentWorkspace().flushDrafts()
+        const { invoke } = await import('@tauri-apps/api/core')
+        const action = await invoke<string>('agent_workspace', { action: 'prepare_close', args: {} })
+        if (action === 'hide') {
+          await appWindow.hide()
+          desktopClosing.value = false
+          return
+        }
+      } catch (error) {
+        desktopClosing.value = false
+        ElMessage.error(String(error))
+        return
+      }
 
       try {
         const backup = await backupService.backupBeforeExit()
@@ -467,6 +487,16 @@ onMounted(() => {
   window.addEventListener('ew-writing-storage-recovered', handleStorageRecovered)
   void setupDesktopCloseBackup()
   void schedulePeriodicBackup()
+  // 微信助手：已绑定就拉起长轮询，未绑定时内部直接返回。
+  // 动态引入且让出一帧：通道模块不进首屏关键路径，避免 dev 模式下白屏等待转译
+  if (desktopShell) {
+    weixinChannelTimer = setTimeout(() => {
+      void import('@/ai/channels/weixin/channel').then(channel => {
+        weixinChannel = channel
+        return channel.startWeixinChannel()
+      })
+    }, 0)
+  }
   if (desktopUpdatePreviewEnabled) {
     showDesktopUpdatePreview()
   } else if (desktopShell) {
@@ -476,6 +506,8 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  if (weixinChannelTimer) clearTimeout(weixinChannelTimer)
+  weixinChannel?.stopWeixinChannel()
   if (automaticUpdateTimer) clearTimeout(automaticUpdateTimer)
   manualUpdateMessage?.close()
   void dismissDesktopUpdate()

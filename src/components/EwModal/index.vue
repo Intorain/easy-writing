@@ -1,6 +1,6 @@
 <template>
   <Teleport to="body" :disabled="!appendToBody">
-    <transition name="fade">
+    <transition name="fade" @after-enter="handleOpened" @after-leave="restoreFocus">
       <div
 v-if="visible" class="ew-modal-overlay" :class="{ 'is-click-through': clickThrough || !modal }"
         @click.self="handleOverlayClick">
@@ -9,6 +9,12 @@ v-if="visible" class="ew-modal-overlay" :class="{ 'is-click-through': clickThrou
           class="ew-modal-container animate-zoom-in"
           :class="[customClass, { 'is-resizable': resizable, 'is-resizing': isResizing }]"
           :style="modalStyle"
+          :role="modal ? 'dialog' : undefined"
+          :aria-modal="modal ? true : undefined"
+          :aria-label="title"
+          :data-managed-focus="manageFocus && modal ? '' : undefined"
+          tabindex="-1"
+          @keydown="handleKeydown"
         >
           <!-- Header -->
           <div class="ew-modal-header" :style="headerStyle" @mousedown="onHeaderMouseDown">
@@ -20,8 +26,8 @@ v-if="visible" class="ew-modal-overlay" :class="{ 'is-click-through': clickThrou
                 </h2>
               </slot>
             </div>
-            <button v-if="showClose" class="ew-close-btn" @click="close">
-              <i class="fa-solid fa-xmark"></i>
+            <button v-if="showClose" class="ew-close-btn" type="button" aria-label="关闭弹窗" @click="close">
+              <i class="fa-solid fa-xmark" aria-hidden="true"></i>
             </button>
           </div>
 
@@ -73,12 +79,53 @@ const props = defineProps({
   customClass: { type: String, default: '' },
   initialPosition: { type: Object as () => { x: number; y: number } | undefined, default: undefined }, // Initial position { x, y }
   headerStyle: { type: Object as () => Record<string, string>, default: () => ({}) }, // Custom header style
-  bodyStyle: { type: Object as () => Record<string, string>, default: () => ({}) } // Custom body style
+  bodyStyle: { type: Object as () => Record<string, string>, default: () => ({}) }, // Custom body style
+  /** 按需启用键盘焦点管理，存量可拖拽/非模态窗口保持原有行为。 */
+  manageFocus: { type: Boolean, default: false }
 });
 
-const emit = defineEmits(['update:visible', 'close', 'open']);
+const emit = defineEmits(['update:visible', 'close', 'open', 'opened']);
 
 const modalRef = ref<HTMLElement | null>(null);
+let previousFocus: HTMLElement | null = null;
+
+const focusableElements = () => Array.from(modalRef.value?.querySelectorAll<HTMLElement>(
+  'button:not(:disabled), a[href], input:not(:disabled):not([type="hidden"]), textarea:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex="-1"])'
+) || []).filter(element => element.getClientRects().length && getComputedStyle(element).visibility !== 'hidden');
+
+const handleOpened = () => {
+  if (props.manageFocus && props.modal && !modalRef.value?.contains(document.activeElement)) {
+    modalRef.value?.focus({ preventScroll: true });
+  }
+  emit('opened');
+};
+
+const restoreFocus = () => {
+  const anotherModal = document.querySelector('.ew-modal-container[data-managed-focus]');
+  if (props.manageFocus && !anotherModal && previousFocus?.isConnected) previousFocus.focus({ preventScroll: true });
+  previousFocus = null;
+};
+
+const handleKeydown = (event: KeyboardEvent) => {
+  if (!props.manageFocus || !props.modal) return;
+  // 内部选择器先处理自己的 Esc，不连带关闭整个弹窗。
+  if (event.defaultPrevented || (event.target instanceof Element && event.target.closest('[aria-expanded="true"]'))) return;
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    event.stopPropagation();
+    close();
+  } else if (event.key === 'Tab') {
+    const elements = focusableElements();
+    const first = elements[0];
+    const last = elements[elements.length - 1];
+    if (!first) { event.preventDefault(); modalRef.value?.focus(); }
+    else if (event.shiftKey && (document.activeElement === first || document.activeElement === modalRef.value)) {
+      event.preventDefault(); last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault(); first.focus();
+    }
+  }
+};
 
 // Dragging Logic
 const isDragging = ref(false);
@@ -90,6 +137,7 @@ const resizeStart = { x: 0, y: 0, width: 0, height: 0, transformX: 0, transformY
 
 watch(() => props.visible, (val) => {
   if (val) {
+    if (props.manageFocus) previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     emit('open');
     // Reset drag position on open
     transform.value = { x: 0, y: 0 };
@@ -238,6 +286,7 @@ const handleOverlayClick = () => {
 };
 
 onBeforeUnmount(() => {
+  restoreFocus();
   document.removeEventListener('mousemove', onMouseMove);
   document.removeEventListener('mouseup', onMouseUp);
   document.removeEventListener('mousemove', handleResizeMove);

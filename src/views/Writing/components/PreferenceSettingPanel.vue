@@ -39,6 +39,31 @@ v-for="opt in selfDestructOptions" :key="opt.value" class="opt-btn warn-btn"
       </div>
     </div>
 
+    <!-- 打字机模式：光标低于基准线就自动上滚，基准线在编辑区高度的百分之几 -->
+    <div class="setting-group">
+      <div class="group-label"><i class="fa-solid fa-keyboard"></i> 打字机模式</div>
+      <div class="option-grid" style="grid-template-columns: repeat(5, 1fr); gap: 4px;">
+        <div class="opt-btn" :class="{ active: !typewriterEnabled }" @click="setTypewriterEnabled(false)">关</div>
+        <div
+          v-for="ratio in TYPEWRITER_RATIOS" :key="ratio" class="opt-btn"
+          :class="{ active: typewriterEnabled && typewriterRatio === ratio }" @click="chooseTypewriter(ratio)">
+          {{ ratio }}%
+        </div>
+      </div>
+    </div>
+
+    <!-- 专注模式：只亮光标所在的段，其余段变淡 -->
+    <div class="setting-group">
+      <div class="group-label"><i class="fa-regular fa-eye"></i> 专注模式</div>
+      <div class="switch-row">
+        <span>{{ focusMode ? '已开启' : '已关闭' }}</span>
+        <el-switch
+          :model-value="focusMode"
+          @change="(value: string | number | boolean) => setFocusMode(Boolean(value))"
+        />
+      </div>
+    </div>
+
     <div class="setting-group">
       <div class="group-label"><i class="fa-solid fa-highlighter"></i> 角色设定高亮</div>
       <div class="switch-row">
@@ -48,18 +73,62 @@ v-for="opt in selfDestructOptions" :key="opt.value" class="opt-btn warn-btn"
           @change="(value: string | number | boolean) => setEntityHighlightEnabled(Boolean(value))"
         />
       </div>
+      <details v-if="bookKey" :key="bookKey" class="dismissed-highlights">
+        <summary>
+          <span>当前作品已取消的高亮</span>
+          <span class="dismissed-count">{{ dismissedNames.length }}</span>
+        </summary>
+        <template v-if="dismissedNames.length">
+          <div class="dismissed-actions">
+            <span>仅影响当前作品</span>
+            <button type="button" class="ink-btn ink-btn-outline ink-btn-sm" @click="restoreAll">全部恢复</button>
+          </div>
+          <p v-if="!entityHighlightEnabled" class="dismissed-hint">恢复后，开启上方开关即可显示高亮。</p>
+          <ul class="dismissed-list" aria-label="当前作品已取消的高亮">
+            <li v-for="name in dismissedNames" :key="name">
+              <span class="dismissed-name">{{ name }}</span>
+              <button type="button" class="ink-btn ink-btn-outline ink-btn-sm" :aria-label="`恢复 ${name} 的高亮`" @click="restoreOne(name)">恢复</button>
+            </li>
+          </ul>
+        </template>
+        <p v-else class="dismissed-hint" role="status">当前作品没有已取消的高亮。</p>
+      </details>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { useWritingEditorStore } from '@/stores/writing-editor';
+import { TYPEWRITER_RATIOS, useWritingEditorStore, type TypewriterRatio } from '@/stores/writing-editor';
 import { storeToRefs } from 'pinia';
+import { computed } from 'vue';
+import { ElMessage } from 'element-plus';
 import { TYPING_SOUND_OPTIONS } from '@/config/typing-sounds';
 
+const props = defineProps<{ bookId?: string | number }>();
 const store = useWritingEditorStore();
-const { typingSound, typingEffect, selfDestructMode, entityHighlightEnabled } = storeToRefs(store);
-const { setTypingSound, setTypingEffect, setSelfDestructMode, setEntityHighlightEnabled } = store;
+const bookKey = computed(() => props.bookId == null ? '' : String(props.bookId).trim());
+const dismissedNames = computed(() => bookKey.value ? store.dismissedEntityHighlightKeysByBook[bookKey.value] || [] : []);
+const restoreOne = (name: string) => {
+  if (!bookKey.value) return;
+  try {
+    store.restoreEntityHighlight(bookKey.value, name);
+    ElMessage.success(`已恢复“${name}”的自动高亮`);
+  } catch (error) { ElMessage.error(String(error)); }
+};
+const restoreAll = () => {
+  if (!bookKey.value) return;
+  try {
+    store.resetDismissedEntityHighlights(bookKey.value);
+    ElMessage.success('已恢复当前作品的全部自动高亮');
+  } catch (error) { ElMessage.error(String(error)); }
+};
+const { typingSound, typingEffect, selfDestructMode, entityHighlightEnabled, typewriterEnabled, typewriterRatio, focusMode } = storeToRefs(store);
+const { setTypingSound, setTypingEffect, setSelfDestructMode, setEntityHighlightEnabled, setTypewriterEnabled, setTypewriterRatio, setFocusMode } = store;
+
+const chooseTypewriter = (ratio: TypewriterRatio) => {
+  setTypewriterRatio(ratio);
+  setTypewriterEnabled(true);
+};
 
 const soundOptions = TYPING_SOUND_OPTIONS;
 
@@ -86,6 +155,9 @@ const selfDestructOptions = [
   padding: 16px;
   width: 100%;
   box-sizing: border-box;
+  max-height: min(640px, calc(100vh - 24px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
   background-color: var(--ui-bg);
   color: var(--ink-main);
 }
@@ -174,4 +246,42 @@ const selfDestructOptions = [
   color: var(--ink-main);
   font-size: 13px;
 }
+.dismissed-highlights {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--ink-main);
+
+  button:focus-visible { outline: 2px solid var(--ink-accent); outline-offset: 2px; }
+
+  summary {
+    cursor: pointer;
+    padding: 6px 0;
+    color: var(--ink-sec);
+
+    &:focus-visible { outline: 2px solid var(--ink-accent); outline-offset: 2px; border-radius: 4px; }
+  }
+}
+.dismissed-count { margin-left: 6px; font-variant-numeric: tabular-nums; }
+.dismissed-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 6px 0;
+  color: var(--ink-sec);
+}
+.dismissed-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 180px;
+  overflow-y: auto;
+
+  li { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--ui-border); }
+  li:last-child { border-bottom: none; }
+  button { flex-shrink: 0; }
+}
+.dismissed-name { min-width: 0; overflow-wrap: anywhere; }
+.dismissed-hint { margin: 8px 0 0; color: var(--ink-sec); font-size: 12px; line-height: 1.6; }
+
 </style>

@@ -4,6 +4,7 @@ import { countTextWords } from '@/utils/word-count'
 import { recordWriteJournal } from './write-journal'
 import {
   assertChapterWriteBack,
+  assertChapterVersion,
   buildBookWordCountKey,
   buildChapterStorageKey,
   countDraftWords,
@@ -14,6 +15,7 @@ import {
   normalizeLocalChapterDraft,
   type LocalWritingSettings,
   type LocalChapterDraft,
+  type ChapterSaveOptions,
   type StoredChapterVersion,
   type StoredLocalChapterDraft,
   type WritingStorage,
@@ -105,20 +107,32 @@ export class IndexedDbWritingStorage implements WritingStorage {
     return value === undefined ? null : validateStoredChapter(value, key)
   }
 
-  async saveChapterLocal(payload: LocalChapterDraft) {
+  async saveChapterLocal(payload: LocalChapterDraft, options?: ChapterSaveOptions) {
     const normalized = normalizeLocalChapterDraft(payload)
-    const current = await this.getChapterByIdentity(normalized.userId, normalized.bookId, normalized.chapterId)
+    const storageKey = buildChapterStorageKey(normalized.userId, normalized.bookId, normalized.chapterId)
+    // 读取、版本比较、写入必须处于同一 readwrite 事务，跨标签页也不能插队。
+    const { objectStore, transaction } = await this.store(STORE_CHAPTERS, 'readwrite')
+    const done = transactionDone(transaction)
+    // 事务被主动 abort 时仍由下方原始错误向调用方报告。
+    void done.catch(() => undefined)
+    const current = await requestToPromise<StoredLocalChapterDraft | undefined>(objectStore.get(storageKey))
+    try {
+      assertChapterVersion(storageKey, current, options?.expectedLocalVersion ?? Number(current?.localVersion || 0))
+    } catch (error) {
+      transaction.abort()
+      await done.catch(() => undefined)
+      throw error
+    }
     const record: StoredLocalChapterDraft = {
       ...normalized,
-      storageKey: buildChapterStorageKey(normalized.userId, normalized.bookId, normalized.chapterId),
+      storageKey,
       localVersion: Number(current?.localVersion || normalized.localVersion || 0) + 1,
       updatedAt: normalized.updatedAt || Date.now(),
       // 与 SQLite 实现同语义：覆盖写入不丢备份标记（详见 sqlite-writing-storage）
       lastBackedUpAt: normalized.lastBackedUpAt ?? Number(current?.lastBackedUpAt || 0) ?? 0,
     }
-    const { objectStore, transaction } = await this.store(STORE_CHAPTERS, 'readwrite')
     objectStore.put(record)
-    await transactionDone(transaction)
+    await done
     await this.verifyWriteBack(record)
     return record
   }
@@ -270,14 +284,15 @@ export class IndexedDbWritingStorage implements WritingStorage {
   }
 
   async markChapterBackedUp(userId: string, bookId: string | number, chapterId: number, backupAt: number) {
-    const current = await this.getChapterByIdentity(userId, bookId, chapterId)
-    if (!current) return
     const { objectStore, transaction } = await this.store(STORE_CHAPTERS, 'readwrite')
-    objectStore.put({
+    const done = transactionDone(transaction)
+    const current = await requestToPromise<StoredLocalChapterDraft | undefined>(
+      objectStore.get(buildChapterStorageKey(userId, bookId, chapterId)))
+    if (current) objectStore.put({
       ...current,
-      lastBackedUpAt: Number(backupAt || Date.now()),
+      lastBackedUpAt: Math.max(Number(current.lastBackedUpAt || 0), Number(backupAt || Date.now())),
     })
-    await transactionDone(transaction)
+    await done
   }
 
   async exportAllRecords(): Promise<WritingStorageDump> {

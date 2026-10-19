@@ -22,6 +22,9 @@ export interface AiRecordListItem {
   status: number
   inputPreview: string
   outputPreview: string
+  /** 完整输入/输出（账本各留 2000 字）：调用记录页点开一行看详情用 */
+  input?: string
+  output?: string
   imageUrl?: string
   inputTokens: number
   outputTokens: number

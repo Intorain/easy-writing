@@ -48,14 +48,79 @@ const countChatSessions = (records: IdbRecord[]) =>
     .reduce((sum, record) => sum + (Array.isArray(record.value) ? record.value.length : 0), 0)
 
 export const IDB_STORES: IdbStoreSpec[] = [
+  { name: 'agent', db: 'ew-agent', store: 'records', label: 'Agent 项目与会话', merge: 'add-missing' },
+  {
+    name: 'agent-checkpoints',
+    db: 'ew-agent-checkpoints',
+    store: 'records',
+    label: 'Agent 执行检查点',
+    merge: 'add-missing'
+  },
+  {
+    name: 'agent-operations',
+    db: 'ew-agent-operations',
+    store: 'records',
+    label: 'Agent 操作回执',
+    merge: 'add-missing'
+  },
+  {
+    name: 'agent-author',
+    db: 'ew-agent-author',
+    store: 'records',
+    label: 'Agent 作者规则与裁决',
+    merge: 'put'
+  },
+  {
+    name: 'agent-canon',
+    db: 'ew-agent-canon',
+    store: 'records',
+    label: 'Agent 作品状态索引（可重建）',
+    merge: 'put',
+    count: countByPrefix('card:')
+  },
   { name: 'reference', db: 'ew-local-reference', store: 'book-reference', label: '参考资料', merge: 'put' },
-  { name: 'workflow', db: 'ew-local-workflow', store: 'kv', label: '工作流', merge: 'put', count: countByPrefix('run:') },
-  { name: 'chat', db: 'ew-local-ai-chat', store: 'kv', label: '妙笔对话', merge: 'put', count: countChatSessions },
-  { name: 'ai-records', db: 'ew-local-ai-records', store: 'records', keyPath: 'id', label: 'AI 记录', merge: 'add-missing' },
-  { name: 'breakdown', db: 'ew-local-breakdown', store: 'kv', label: '拆书项目', merge: 'add-missing', count: countByPrefix('project:') },
-  { name: 'ai-images', db: 'ew-local-ai-images', store: 'images', keyPath: 'id', label: '生图记录', merge: 'add-missing' },
+  {
+    name: 'workflow',
+    db: 'ew-local-workflow',
+    store: 'kv',
+    label: '工作流',
+    merge: 'put',
+    count: countByPrefix('run:')
+  },
+  {
+    name: 'chat',
+    db: 'ew-local-ai-chat',
+    store: 'kv',
+    label: '妙笔对话',
+    merge: 'put',
+    count: countChatSessions
+  },
+  {
+    name: 'ai-records',
+    db: 'ew-local-ai-records',
+    store: 'records',
+    keyPath: 'id',
+    label: 'AI 记录',
+    merge: 'add-missing'
+  },
+  {
+    name: 'breakdown',
+    db: 'ew-local-breakdown',
+    store: 'kv',
+    label: '拆书项目',
+    merge: 'add-missing',
+    count: countByPrefix('project:')
+  },
+  {
+    name: 'ai-images',
+    db: 'ew-local-ai-images',
+    store: 'images',
+    keyPath: 'id',
+    label: '生图记录',
+    merge: 'add-missing'
+  },
   { name: 'skin', db: 'ew-skin-store', store: 'kv', label: '自定义背景', merge: 'put' },
-  { name: 'rank', db: 'ew-local-rank', store: 'kv', label: '榜单缓存', merge: 'add-missing' },
+  { name: 'rank', db: 'ew-local-rank', store: 'kv', label: '榜单缓存', merge: 'add-missing' }
 ]
 
 export const idbEntryPath = (name: string) => `idb/${name}.json`
@@ -130,7 +195,7 @@ export const restoreIdbBlobs = async (
 // ---------------------------------------------------------------------------
 
 /** 记录里按字段名识别的关联 id；值是数字或数字字符串，换号后保持原类型 */
-const ID_FIELDS: Record<string, Exclude<keyof IdRemap, 'referenceEntities'>> = {
+const ID_FIELDS: Record<string, Exclude<keyof IdRemap, 'referenceEntities' | 'agentIds' | 'skillIds'>> = {
   bookId: 'books',
   chapterId: 'chapters',
   currentChapterId: 'chapters',
@@ -145,11 +210,11 @@ const ID_FIELDS: Record<string, Exclude<keyof IdRemap, 'referenceEntities'>> = {
   taskId: 'tasks',
   activeTaskId: 'tasks',
   latestBookTaskId: 'tasks',
-  latestStepTaskId: 'tasks',
+  latestStepTaskId: 'tasks'
 }
-const ID_LIST_FIELDS: Record<string, Exclude<keyof IdRemap, 'referenceEntities'>> = {
+const ID_LIST_FIELDS: Record<string, Exclude<keyof IdRemap, 'referenceEntities' | 'agentIds' | 'skillIds'>> = {
   chapterIds: 'chapters',
-  relatedChapterIds: 'chapters',
+  relatedChapterIds: 'chapters'
 }
 
 const mapIdValue = (map: Map<number, number>, value: unknown): unknown => {
@@ -202,14 +267,26 @@ export const planIdbIdRemap = (
   allocate: () => number,
   remap: IdRemap
 ): IdRemap => {
+  // Plan graph identities once. Builtin skills retain their stable product IDs.
+  for (const record of backup.agent || []) {
+    const value = record.value
+    if (!isPlainObject(value) || typeof value.id !== 'string') continue
+    const skill = String(record.key).startsWith('skill:')
+    if (skill && value.source === 'builtin' && value.fileSource !== 'user') continue
+    const next = crypto.randomUUID()
+    remap.agentIds.set(value.id, next)
+    if (skill) remap.skillIds.set(value.id, next)
+  }
   for (const record of backup.reference || []) {
     if (!isPlainObject(record.value)) continue
-    const entities = new Map<number,number>()
+    const entities = new Map<number, number>()
     for (const value of Object.values(record.value)) {
       if (!Array.isArray(value)) continue
-      for (const entity of value) if (isPlainObject(entity) && Number.isSafeInteger(Number(entity.id)) && Number(entity.id) !== 0) entities.set(Number(entity.id),allocate())
+      for (const entity of value)
+        if (isPlainObject(entity) && Number.isSafeInteger(Number(entity.id)) && Number(entity.id) !== 0)
+          entities.set(Number(entity.id), allocate())
     }
-    remap.referenceEntities.set(String(record.key),entities)
+    remap.referenceEntities.set(String(record.key), entities)
   }
   const workflowKeys = currentKeys.workflow || new Set<string>()
   for (const record of backup.workflow || []) {
@@ -252,6 +329,132 @@ const remapPrefixedKey = (key: string | number, prefix: string, map: Map<number,
 
 /** 合并模式：按库把键与记录里的关联 id 换号 */
 export const remapIdbRecords = (name: string, records: IdbRecord[], remap: IdRemap): IdbRecord[] => {
+  // 合并导入时书籍会换号，历史检查点里的二进制模型上下文不可机械改写。
+  // 保留对话/成果并更新引用，运行从新消息开始；覆盖恢复才保留原检查点和回执。
+  if (name === 'agent-checkpoints' || name === 'agent-operations') return []
+  if (name === 'agent') {
+    const ids = remap.agentIds
+    const walk = (value: unknown, ownerBookId?: string): unknown => {
+      if (Array.isArray(value)) return value.map(item => walk(item, ownerBookId))
+      if (!isPlainObject(value)) return value
+      const bookId = String(value.bookId ?? ownerBookId ?? '')
+      const entities = remap.referenceEntities.get(bookId) || new Map<number, number>()
+      return Object.fromEntries(
+        Object.entries(value).map(([key, item]) => {
+          if (key === 'bookId' || key === 'targetBookId' || key === 'contextBookId')
+            return [key, mapIdValue(remap.books, item)]
+          if (key === 'chapterId') return [key, mapIdValue(remap.chapters, item)]
+          if (key === 'volumeId') return [key, mapIdValue(remap.volumes, item)]
+          if (key === 'bookIds' && Array.isArray(item)) return [key, item.map(id => mapIdValue(remap.books, id))]
+          if (key === 'chapterIds' && Array.isArray(item)) return [key, item.map(id => mapIdValue(remap.chapters, id))]
+          if (
+            key === 'entityId' ||
+            key === 'outlineId' ||
+            key === 'parentId' ||
+            key === 'groupId' ||
+            (key === 'id' && typeof item === 'number')
+          )
+            return [key, mapIdValue(entities, item)]
+          if (
+            (key === 'id' || key.endsWith('Id') || key.endsWith('_id') || key === 'replacedBy') &&
+            typeof item === 'string'
+          )
+            return [key, ids.get(item) || item]
+          if ((key.endsWith('Ids') || key.endsWith('_ids')) && Array.isArray(item))
+            return [key, item.map(id => typeof id === 'string' ? ids.get(id) || id : id)]
+          return [key, walk(item, bookId)]
+        })
+      )
+    }
+    return records.map(record => {
+      if (!isPlainObject(record.value)) return record
+      const value = walk(record.value) as Record<string, unknown>
+      if (String(record.key).startsWith('batch:') || (Array.isArray(value.queue) && value.sessionId)) {
+        if (['queued', 'running', 'waiting'].includes(String(value.status))) value.status = 'paused'
+        value.waitingReason = null
+        value.queue = (value.queue as Array<Record<string, unknown>>).map(step => ({
+          ...step, status: step.status === 'running' ? 'paused' : step.status
+        }))
+      }
+      // 操作请求只供原任务幂等重放，合并后保留候选和原资料基线即可。
+      if (value.kind === 'material') delete value.request
+      if (Array.isArray(value.messages)) {
+        value.status = 'completed'
+        value.runId = null
+        value.pendingInputs = []
+        value.error = '从备份合并的历史会话，可发送新消息继续；旧任务检查点未重放。'
+        value.messages = (value.messages as Array<Record<string, unknown>>).map(message => {
+          if (isPlainObject(message.choice)) message.choice = { ...message.choice, status: 'skipped' }
+          return message
+        })
+      }
+      const oldId = record.value.id
+      const key = typeof oldId === 'string' && String(record.key).endsWith(`:${oldId}`)
+        ? String(record.key).slice(0, -oldId.length) + String(value.id) : record.key
+      return { key, value }
+    })
+  }
+  if (name === 'agent-author' || name === 'agent-canon') {
+    // 作者规则、画像、裁决与派生的章节卡、状态、线索：键与记录里的书籍、章节、人物编号一起换号。
+    // 键形如 card:{bookId}:{chapterId}、rule:book:{bookId}:{id}、platform:{id}、rule:author:{id}。
+    const bookAtSegment: Record<string, number> = {
+      card: 1,
+      fact: 1,
+      state: 1,
+      thread: 1,
+      suspect: 1,
+      index: 1,
+      'index-control': 1,
+      style: 1,
+      'thread-override': 1,
+      verdict: 1,
+      sample: 1,
+      'style-lock': 1,
+      aispans: 1,
+      'book-profile': 1,
+      'book-requirements': 1
+    }
+    const chapterAtSegment: Record<string, number> = { card: 2, aispans: 2 }
+    const walk = (value: unknown, ownerBookId?: string): unknown => {
+      if (Array.isArray(value)) return value.map(item => walk(item, ownerBookId))
+      if (!isPlainObject(value)) return value
+      const bookId = String(value.bookId ?? ownerBookId ?? '')
+      const entities = remap.referenceEntities.get(bookId) || new Map<number, number>()
+      return Object.fromEntries(
+        Object.entries(value).map(([key, item]) => {
+          if (key === 'bookId') return [key, mapIdValue(remap.books, item)]
+          if (
+            key === 'chapterId' ||
+            key === 'plantedChapter' ||
+            key === 'paidChapter' ||
+            key === 'firstChapter' ||
+            key === 'lastChapter' ||
+            key === 'lastAppearedChapter'
+          )
+            return [key, mapIdValue(remap.chapters, item)]
+          if (key === 'chapterIds' && Array.isArray(item)) return [key, item.map(id => mapIdValue(remap.chapters, id))]
+          // 人物编号沿用资料库的数字 id（文本形式）；非数字的 id（章节卡键、线索号）原样保留
+          if (key === 'characterId' || key === 'entityId' || key === 'id') return [key, mapIdValue(entities, item)]
+          return [key, walk(item, bookId)]
+        })
+      )
+    }
+    return records.map(record => {
+      const segments = String(record.key).split(':')
+      const prefix = segments[0] === 'rule' && segments[1] === 'book' ? 'rule:book' : segments[0]
+      const bookIndex = prefix === 'rule:book' ? 2 : bookAtSegment[prefix]
+      if (bookIndex !== undefined && segments[bookIndex] !== undefined)
+        segments[bookIndex] = String(mapIdValue(remap.books, segments[bookIndex]))
+      const chapterIndex = chapterAtSegment[prefix]
+      if (chapterIndex !== undefined && segments[chapterIndex] !== undefined)
+        segments[chapterIndex] = String(mapIdValue(remap.chapters, segments[chapterIndex]))
+      const value = walk(record.value)
+      const key = segments.join(':')
+      // 记录 id 与键相同的（章节卡、线索、规则等）跟着键换号；画像这类 id 独立于键的保持原值
+      const original = String(record.key)
+      return { key, value: isPlainObject(value) && value.id === original ? { ...value, id: key } : value }
+    })
+  }
   if (name === 'ai-images') {
     return records.map(record => ({
       key: mapIdValue(remap.images, record.key) as string | number,

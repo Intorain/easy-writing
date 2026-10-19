@@ -1,6 +1,6 @@
 [package]
 name = "ew-client-desktop"
-version = "1.2.1"
+version = "2.0.0"
 description = "易创桌面客户端"
 authors = ["yilujian"]
 license = "AGPL-3.0-only"
@@ -12,6 +12,10 @@ edition = "2021"
 [lib]
 name = "ew_client_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+# 本地完整验收文件按仓库约定不上传；普通构建不依赖它们。
+local-tests = []
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -29,14 +33,36 @@ tauri-plugin-single-instance = "2"
 tauri-plugin-window-state = "2.4.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+jsonschema = { version = "0.33", default-features = false }
 sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio"] }
 sha2 = "0.10"
+similar = "3.2"
+uuid = { version = "1", features = ["v4"] }
+chrono = "0.4"
 tauri-plugin-updater = "2"
 # 关窗兜底超时用（tauri 自带 async_runtime 即 tokio，这里显式声明以使用 tokio::time）
-tokio = { version = "1", features = ["time"] }
+tokio = { version = "1", features = ["time", "net", "sync", "rt", "rt-multi-thread"] }
+# 模型网关：本机 HTTP 服务端与到供应商的客户端；与 tauri-plugin-http 共用同一版本的 reqwest/hyper
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+bytes = "1"
+futures-util = "0.3"
 # 一键备份/恢复的单文件压缩包（updater 已间接依赖同一版本）
 zip = { version = "4", default-features = false, features = ["deflate"] }
+# 微信 ClawBot 通道的 X-WECHAT-UIN 请求头要 base64；reqwest 已带同版本，不增加体积
+base64 = "0.22"
+# 微信通道发图片/文件：iLink 协议要求媒体按 AES-128-ECB 加密上传 CDN，并附明文 MD5；
+# 密钥与文件键用随机字节（rand / hex 依赖树里已有同版本）
+aes = "0.8"
+md-5 = "0.10"
+hex = "0.4"
+rand = "0.8"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # 与 Tauri 的原生窗口调整使用同一主队列，确保几何变更完成后再显示。
 dispatch2 = "0.3.1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

@@ -63,7 +63,7 @@
             全书在本机解析章节结构，创建后进入工作台发起 AI 拆解。
           </div>
 
-          <button type="button" class="ink-btn ink-btn-outline ink-btn-sm upload-cancel-btn" @click="cancelUpload">
+          <button type="button" class="ink-btn ink-btn-outline ink-btn-sm upload-cancel-btn" :disabled="!canCancelUpload" @click="cancelUpload">
             <i class="fa-solid fa-xmark"></i>
             取消上传
           </button>
@@ -220,6 +220,7 @@ const historyVisible = ref(false)
 
 const viewState = ref<'idle' | 'processing' | 'success'>('idle')
 const progress = ref(0)
+const canCancelUpload = ref(true)
 const statusText = ref('正在本地解析章节结构...')
 const waitTipVisible = ref(true)
 const isDragging = ref(false)
@@ -353,22 +354,26 @@ const mapResult = (result: BreakdownProjectSummary) => {
 
 const startProcess = async (file: File) => {
   currentFile.value = file
+  canCancelUpload.value = true
   viewState.value = 'processing'
   progress.value = 0
   statusText.value = '正在本地解析章节结构...'
   waitTipVisible.value = true
 
-  // 本地解析很快，但仍保留"取消"：解析完成时若已取消，就把刚建的项目删掉
+  // 取消交给导入器清理未发布的暂存，不删除已存在或已经完成的参考书。
   const controller = new AbortController()
   uploadController.value = controller
 
   try {
-    progress.value = 60
-    const { data } = await createLocalBreakdownProject(file)
-    if (controller.signal.aborted) {
-      await deleteBreakdownProjectApi({ id: data.id }).catch(() => undefined)
-      return
-    }
+    const { data } = await createLocalBreakdownProject(file, {
+      signal: controller.signal,
+      onProgress: step => {
+        statusText.value = step.stage
+        progress.value = step.total ? Math.round(step.done / step.total * 100) : 0
+        canCancelUpload.value = step.cancellable
+      }
+    })
+    if (controller.signal.aborted) return
     mapResult(data)
     progress.value = 100
     viewState.value = 'success'
@@ -383,6 +388,7 @@ const startProcess = async (file: File) => {
 
 // 取消解析：本地无网络请求，标记取消并回到初始态
 const cancelUpload = () => {
+  if (!canCancelUpload.value) return
   uploadController.value?.abort()
   uploadController.value = null
   resetUpload()
@@ -449,7 +455,9 @@ const fetchHistory = async () => {
       id: item.id,
       title: item.title,
       author: item.author || '未知作者',
-      progress: item.status === 'wait'
+      progress: item.agentIndexedChapters
+        ? `已生成 ${item.agentIndexedChapters}/${item.chapterCount} 章的章节卡`
+        : item.status === 'wait'
         ? '待拆解'
         : item.progress >= 100
           ? '已完成'

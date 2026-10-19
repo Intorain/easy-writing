@@ -176,7 +176,46 @@ async fn ensure_core_schema(db: &mut SqliteConnection) -> Result<(), String> {
             .map_err(error)?;
         }
     }
+    // 作品状态层的变更事件、切块检索与实体索引；全部派生数据，旧库首次打开即建。
+    crate::agent_indexer::ensure_schema(db).await?;
+    // 主干旧的事实与索引表：已确认事实迁进作品记忆后删表，只在表还在时做
+    crate::agent_story::retire_legacy_ai(db).await?;
+    crate::agent_story::migrate_preferences_to_author_scope(db).await?;
     Ok(())
+}
+pub(crate) fn key_prefix(prefix: &str) -> String {
+    let mut encoded = serde_json::json!(prefix).to_string();
+    encoded.pop();
+    encoded
+}
+/// 只列出记录标识，不读取记录内容：榜单快照这类大记录按键枚举日期时，不能把整库内容读出来。
+pub(crate) async fn keys_at(
+    db: &mut SqliteConnection,
+    namespace: &str,
+    prefix: &str,
+) -> Result<Vec<Value>, String> {
+    // 空前缀保持 IndexedDB getAllKeys 语义，数字标识也返回。
+    let keys: Vec<String> = if prefix.is_empty() {
+        sqlx::query_scalar("SELECT key FROM desktop_records WHERE namespace=? ORDER BY key")
+            .bind(namespace)
+            .fetch_all(db)
+            .await
+            .map_err(error)?
+    } else {
+        let encoded = key_prefix(prefix);
+        sqlx::query_scalar(
+            "SELECT key FROM desktop_records WHERE namespace=? AND substr(key,1,length(?))=? ORDER BY key",
+        )
+        .bind(namespace)
+        .bind(&encoded)
+        .bind(&encoded)
+        .fetch_all(db)
+        .await
+        .map_err(error)?
+    };
+    keys.iter()
+        .map(|key| serde_json::from_str(key).map_err(error))
+        .collect()
 }
 pub(crate) fn validate_core_record(table: &str, value: &Value) -> Result<(), String> {
     let invalid = || format!("旧数据记录结构无效：{table}，未覆盖原数据");
@@ -319,6 +358,19 @@ pub async fn desktop_store_read(
         &mut connect_at(&root(&app)?).await?,
         &namespace,
         staging.unwrap_or(false),
+    )
+    .await
+}
+#[tauri::command]
+pub async fn desktop_store_keys(
+    app: crate::DesktopAppHandle,
+    namespace: String,
+    prefix: Option<String>,
+) -> Result<Vec<Value>, String> {
+    keys_at(
+        &mut connect_at(&root(&app)?).await?,
+        &namespace,
+        prefix.as_deref().unwrap_or(""),
     )
     .await
 }
@@ -678,6 +730,21 @@ async fn compare_write_at(
     tx.commit().await.map_err(error)?;
     Ok(true)
 }
+/// Agent 宿主的比较写：原值不符时直接报错，调用方不必再判断布尔结果。只有测试在用。
+#[cfg(test)]
+pub(crate) async fn compare_record_at(
+    root: &Path,
+    namespace: &str,
+    key: Value,
+    expected: Option<String>,
+    value: String,
+) -> Result<(), String> {
+    if compare_write_at(root, namespace, key, expected, value).await? {
+        Ok(())
+    } else {
+        Err("资料已被其他操作更新，本次内容未覆盖；请保留编辑内容并重新读取资料".into())
+    }
+}
 #[tauri::command]
 pub async fn desktop_store_compare_write(
     app: crate::DesktopAppHandle,
@@ -809,6 +876,8 @@ pub async fn recover_restore_at(root: &Path, prompts: &Path) -> Result<(), Strin
         }
         copy_prompts(&journal.join("prompts"), prompts)?;
     }
+    // 库文件可能已被整体替换：下一次检查要重新跑完整性检查
+    crate::storage_migration::forget_health(root);
     fs::remove_dir_all(journal).map_err(error)
 }
 #[tauri::command]
@@ -824,11 +893,12 @@ pub struct LegacyRestoreBase {
 pub async fn desktop_restore_apply(
     app: crate::DesktopAppHandle,
     statements: Vec<SqlStatement>,
-    stores: Vec<StoreDump>,
+    mut stores: Vec<StoreDump>,
     replace: bool,
     session: String,
     mode: String,
     legacy_base: Option<LegacyRestoreBase>,
+    skill_ids: Option<std::collections::HashMap<String, String>>,
 ) -> Result<usize, String> {
     if app.webview_windows().len() > 1 {
         return Err("请先关闭独立的大纲、预览等窗口，再恢复数据".into());
@@ -843,6 +913,9 @@ pub async fn desktop_restore_apply(
     }
     let root = root(&app)?;
     let prompts = crate::prompt_dir_path()?;
+    // Agent 技能记录：重建本机路径、撤销跨机器的脚本授权；备份缺脚本资源时拒绝不完整恢复
+    let skill_ids = skill_ids.unwrap_or_default();
+    crate::full_backup::prepare_skill_records(&session, &prompts, &mut stores, &skill_ids)?;
     let result = restore_at(
         &root,
         &prompts,
@@ -850,7 +923,7 @@ pub async fn desktop_restore_apply(
         stores,
         replace,
         legacy_base,
-        || crate::full_backup::full_restore_apply_prompts(session, mode),
+        || crate::full_backup::restore_prompts(&session, &mode, &prompts, &skill_ids),
     )
     .await;
     if result.is_ok() {
@@ -995,7 +1068,10 @@ mod tests {
                 .unwrap()
                 .is_empty());
             assert_eq!(
-                sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM desktop_meta")
+                // 迁移失败不能留下任何迁移标记；索引器自己的结构版本与 FTS 可用性记录不算迁移标记
+                sqlx::query_scalar::<_, i64>(
+                    "SELECT COUNT(*) FROM desktop_meta WHERE key NOT IN ('agent-index-schema','fts5-available')"
+                )
                     .fetch_one(&mut db)
                     .await
                     .unwrap(),

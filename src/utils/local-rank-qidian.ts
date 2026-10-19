@@ -1,6 +1,7 @@
 import type { NovelRankItem } from '@/types/novel-rank'
 import { buildQidianDigitMapFromTtf, decodeQidianObfuscatedNumber } from '@/utils/qidian-font'
 import { crawlRankPageViaWindow } from '@/utils/local-rank-window'
+import { throwIfAborted } from '@/utils/abortable'
 import { isTauriRuntime } from '@/storage'
 
 /**
@@ -148,7 +149,8 @@ export const applyQidianDigitMap = (items: NovelRankItem[], digitMap: Map<number
     }
   })
 
-const fetchQidianFontDigitMap = async (fontTtfUrl: string, codepoints: number[]): Promise<Map<number, string>> => {
+const fetchQidianFontDigitMap = async (fontTtfUrl: string, codepoints: number[], signal?: AbortSignal): Promise<Map<number, string>> => {
+  throwIfAborted(signal)
   if (!fontTtfUrl || !codepoints.length || !isTauriRuntime()) return new Map()
   let parsed: URL
   try {
@@ -163,17 +165,19 @@ const fetchQidianFontDigitMap = async (fontTtfUrl: string, codepoints: number[])
     const response = await tauriFetch(fontTtfUrl, {
       method: 'GET',
       headers: { Referer: 'https://www.qidian.com/' },
+      signal,
     })
     if (!response.ok) return new Map()
     return buildQidianDigitMapFromTtf(await response.arrayBuffer(), codepoints)
   } catch {
+    throwIfAborted(signal)
     // 字体拿不到只损失月票数字，条目本身照常入库
     return new Map()
   }
 }
 
 /** 抓取一个起点榜单源：逐页隐藏窗口取渲染后 HTML，合并去重，月票按需解码 */
-export const fetchQidianRank = async (baseUrl: string, maxPages: number): Promise<NovelRankItem[]> => {
+export const fetchQidianRank = async (baseUrl: string, maxPages: number, signal?: AbortSignal): Promise<NovelRankItem[]> => {
   const pages = Math.max(1, Math.min(Number(maxPages) || 1, 5))
   const merged: NovelRankItem[] = []
   const seen = new Set<string>()
@@ -181,11 +185,13 @@ export const fetchQidianRank = async (baseUrl: string, maxPages: number): Promis
   const codepoints = new Set<number>()
 
   for (let page = 1; page <= pages; page += 1) {
+    throwIfAborted(signal)
     const url = buildQidianPagedUrl(baseUrl, page)
     let html = ''
     try {
-      html = await crawlRankPageViaWindow(url, { waitSelector: QIDIAN_RANK_SELECTOR, scrollRounds: 0 })
+      html = await crawlRankPageViaWindow(url, { waitSelector: QIDIAN_RANK_SELECTOR, scrollRounds: 0 }, signal)
     } catch (error) {
+      throwIfAborted(signal)
       // 首页失败整体报错；后续页失败用已拿到的部分
       if (page === 1) throw error instanceof Error ? error : new Error(String(error))
       break
@@ -207,6 +213,6 @@ export const fetchQidianRank = async (baseUrl: string, maxPages: number): Promis
   }
 
   if (!merged.length) throw new Error('起点榜单没有抓到条目')
-  const digitMap = await fetchQidianFontDigitMap(fontTtfUrl, [...codepoints])
+  const digitMap = await fetchQidianFontDigitMap(fontTtfUrl, [...codepoints], signal)
   return applyQidianDigitMap(merged, digitMap)
 }

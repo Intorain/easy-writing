@@ -255,7 +255,8 @@ import { showApiError } from '@/utils/api-error'
 import { ElMessage } from 'element-plus'
 import { inkConfirm } from '@/utils/ink-confirm'
 import { isTauriRuntime } from '@/storage'
-import { getLocalLibraryStorage } from '@/storage/local-library'
+import { getLocalLibraryStorage, repairLocalChapterOrder } from '@/storage/local-library'
+import { readOpenVolumeIds, resolveVolumeOpen, saveOpenVolumeIds } from '../composables/catalog-folds'
 import { readUiPreferences } from '@/stores/ui-preferences'
 
 const route = useRoute()
@@ -385,7 +386,7 @@ const handleCreateChapterSave = async (data: { volumeId: string | number; title:
       editingChapter.value = null
       await loadCatalogTree()
     } else {
-      await localLibrary.createLocalChapter({
+      const created = await localLibrary.createLocalChapter({
         bookId: bookId.value,
         title: data.title,
         summary: data.summary,
@@ -394,11 +395,11 @@ const handleCreateChapterSave = async (data: { volumeId: string | number; title:
       ElMessage.success('新建成功')
       await loadCatalogTree()
 
-      // 自动选中新章节 (需要重新加载后才能获取到新ID)
-      const volume = catalogItems.value.find(v => String(v.id) === String(data.volumeId))
-      if (volume && volume.children.length > 0) {
-        const newChapter = volume.children[volume.children.length - 1]
-        handleChapterClick(newChapter)
+      // 按 id 选中刚建的章（它接在卷末，位置不靠猜），并展开它所在的卷
+      const newChapter = findChapterInCatalog(created.id)
+      if (newChapter) {
+        await handleChapterClick(newChapter)
+        revealActiveVolume()
       }
     }
   } catch (error) {
@@ -427,13 +428,17 @@ const handleCreateVolumeSave = async (data: { title: string, summary: string }) 
         finalTitle = generateNextVolumeTitle(existingTitles)
       }
 
-      await localLibrary.createLocalVolume({
+      const createdVolume = await localLibrary.createLocalVolume({
         bookId: bookId.value,
         title: finalTitle,
         summary: data.summary || ''
       })
       ElMessage.success('新建成功')
       await loadCatalogTree()
+      // 新建的当前卷展开，其他卷保持原样
+      const opened = catalogItems.value.find(v => String(v.id) === String(createdVolume.id))
+      if (opened) opened.open = true
+      persistFolds()
 
       // 滚动到底部
       nextTick(() => {
@@ -1069,6 +1074,16 @@ const scrollCatalogToChapter = (chapterId: number) => {
  * 已经有活动章（切章刷新目录）、工作流任务入口（任务指定章节优先）、用户关掉了这个开关，都不介入。
  */
 const applyRememberedChapter = async (loadRevision: number) => {
+  // Agent 成果直达章节时先校验当前目录归属，不把其他作品的编号直接写入编辑状态。
+  if (route.query.from === 'agent' && !findChapterInCatalog(editorStore.activeChapterId)) {
+    const target = findChapterInCatalog(Number(route.query.chapterId))
+    if (target && !isVirtualWorkflowChapter(target)) {
+      activeId.value = target.id
+      activeType.value = 'chapter'
+      editorStore.setActiveChapter({ id: target.id, title: formatChapterDisplayTitle(target), summary: target.summary })
+      return
+    }
+  }
   if (findChapterInCatalog(editorStore.activeChapterId)) return
   if (route.query.from === 'workflow') return
   if (!readUiPreferences().restoreWritingPosition) return
@@ -1141,8 +1156,11 @@ const loadCatalogTree = async () => {
     // 本地树与目录组件的 Volume 形状字段级兼容（多余字段忽略，缺省字段组件有兜底）
     const volumeList = (await localLibrary.getLocalBookTree(bookId.value)) as unknown as Volume[]
     if (loadRevision !== catalogLoadRevision) return
+    // 折叠状态不随重载丢失：改名、新建、删除后各卷保持原样；进书按上次离开记的恢复，没记录就只展开当前章所在的卷
+    const previousOpen = new Map(catalogItems.value.map(item => [String(item.id), item.open !== false]))
+    const savedOpen = readOpenVolumeIds(bookId.value)
     volumeList.forEach((vol: Volume) => {
-      vol.open = vol.open !== false
+      vol.open = resolveVolumeOpen(String(vol.id), previousOpen, savedOpen)
       if (!Array.isArray(vol.children)) vol.children = []
     })
     catalogItems.value = volumeList
@@ -1150,6 +1168,7 @@ const loadCatalogTree = async () => {
     if (loadRevision !== catalogLoadRevision) return
     ensureActiveChapter()
     recordLastChapter(editorStore.activeChapterId)
+    revealActiveVolume()
   } catch (error) {
     if (loadRevision !== catalogLoadRevision) return
     console.error('加载目录树失败:', error)
@@ -1263,7 +1282,9 @@ onMounted(() => {
   if (isWebCompactWriting()) collapsed.value = true
   editorStore.setSidebarWidth(editorStore.sidebarWidth)
   bookId.value = route.params.bookId as string
-  loadCatalogTree()
+  // 先把旧数据里没编号的章修好再读目录（一次性，见 repairLocalChapterOrder）
+  void (bookId.value ? repairLocalChapterOrder(bookId.value).catch(error => console.warn('修复目录顺序失败', error)) : Promise.resolve())
+    .then(() => loadCatalogTree())
   window.addEventListener('ew-writing-catalog-refresh', handleCatalogRefresh)
   window.addEventListener('ew-writing-open-chapter', handleOpenChapterEvent as EventListener)
   window.addEventListener('ew-writing-chapter-words', handleChapterWordsEvent as EventListener)
@@ -1354,6 +1375,26 @@ const handleVolumeClick = (volume: Volume) => {
   volume.open = !volume.open
   activeId.value = volume.id
   activeType.value = 'volume'
+  persistFolds()
+}
+
+/** 当前章所在的卷必须展开着，作者才看得到自己在哪；其他卷不动 */
+const revealActiveVolume = () => {
+  if (activeType.value === 'chapter' && activeId.value !== null) {
+    const volume = catalogItems.value.find(item => item.children.some(chapter => chapter.id === activeId.value))
+    if (volume) volume.open = true
+  }
+  persistFolds()
+}
+
+let persistedFolds = ''
+const persistFolds = () => {
+  if (!bookId.value) return
+  const openIds = catalogItems.value.filter(item => item.open !== false).map(item => String(item.id))
+  const key = `${bookId.value}:${openIds.join(',')}`
+  if (key === persistedFolds) return
+  persistedFolds = key
+  void saveOpenVolumeIds(bookId.value, openIds)
 }
 
 const handleCreateChapterBtn = () => {
@@ -1390,7 +1431,7 @@ const handleAddChapter = async (volume: Volume) => {
     const existingTitles = volume.children.map(c => c.title)
     const nextTitle = generateNextChapterTitle(existingTitles)
 
-    await localLibrary.createLocalChapter({
+    const created = await localLibrary.createLocalChapter({
       bookId: bookId.value,
       title: nextTitle,
       volumeId: String(volume.id)
@@ -1401,10 +1442,9 @@ const handleAddChapter = async (volume: Volume) => {
     // 3. 重新加载目录树
     await loadCatalogTree()
 
-    // 4. 找到新创建的章节并进入编辑模式
-    const updatedVolume = catalogItems.value.find(v => v.id === volume.id)
-    if (updatedVolume && updatedVolume.children.length > 0) {
-      const newChapter = updatedVolume.children[updatedVolume.children.length - 1]
+    // 4. 按 id 找到刚建的章（它接在卷末）、展开所在卷，进入编辑模式
+    const newChapter = findChapterInCatalog(created.id)
+    if (newChapter) {
       activeId.value = newChapter.id
       activeType.value = 'chapter'
       editorStore.setActiveChapter({
@@ -1412,6 +1452,7 @@ const handleAddChapter = async (volume: Volume) => {
         title: formatChapterDisplayTitle(newChapter),
         summary: newChapter.summary
       })
+      revealActiveVolume()
 
       // 延迟一下以确保 DOM 更新
       setTimeout(() => {
@@ -1585,6 +1626,7 @@ const onDrop = async (_e: DragEvent, target: DragData) => {
         catalogItems.value[targetVolIndex].children.unshift(item)
         // 自动展开目标卷
         catalogItems.value[targetVolIndex].open = true
+        persistFolds()
 
         const chapterIds = getPersistedChapterIds(catalogItems.value[targetVolIndex].children)
         await localLibrary.sortLocalChapters({ chapterIds, volumeId: String(catalogItems.value[targetVolIndex].id) })

@@ -287,6 +287,7 @@ const normalizeRichText = (html: unknown) => {
 }
 
 const syncedContentById = new Map<number, string>()
+const sourceContentById = new Map<number, string>()
 
 const normalizeId = (id?: number | string | null) => id !== undefined && id !== null ? String(id) : ''
 
@@ -390,11 +391,13 @@ const buildOutlineTree = (nodes: OutlineNode[]) => {
   }
   outlineTree.value = tree
   syncedContentById.clear()
+  sourceContentById.clear()
   syncedTitleById.clear()
   for (const folder of tree) {
     for (const item of folder.children) {
       if (typeof item.originId === 'number' && Number.isFinite(item.originId)) {
         syncedContentById.set(item.originId, normalizeRichText(item.content))
+        sourceContentById.set(item.originId, item.content || '')
         syncedTitleById.set(item.originId, item.title)
       }
     }
@@ -469,11 +472,14 @@ const flushPendingContentSave = async () => {
     await updateOutlineNodeApi({
       id: payload.id,
       content: payload.content
-    })
+    }, { content: sourceContentById.get(payload.id) })
+    sourceContentById.set(payload.id, payload.content)
     syncedContentById.set(payload.id, normalizeRichText(payload.content))
     return true
   } catch (error) {
     console.error('同步大纲内容失败:', error)
+    if (!pendingContentSave) pendingContentSave = payload
+    ElMessage.error(error instanceof Error ? error.message : '保存失败，当前编辑内容已保留')
     return false
   }
 }
@@ -504,7 +510,7 @@ const flushPendingTitles = (): Promise<boolean> => {
       const [id, title] = pendingTitles.entries().next().value as [number, string]
       pendingTitles.delete(id)
       try {
-        await updateOutlineNodeApi({ id, title })
+        await updateOutlineNodeApi({ id, title }, { title: syncedTitleById.get(id) })
         syncedTitleById.set(id, title)
       } catch (error) {
         if (!pendingTitles.has(id)) pendingTitles.set(id, title)

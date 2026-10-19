@@ -6,6 +6,8 @@ import { countTextWords } from '@/utils/word-count'
 import { recordWriteJournal } from './write-journal'
 import {
   assertChapterWriteBack,
+  assertChapterVersion,
+  ChapterVersionConflictError,
   buildBookWordCountKey,
   buildChapterStorageKey,
   countDraftWords,
@@ -18,6 +20,7 @@ import {
   sleep,
   SQLITE_OPEN_RETRY_DELAYS,
   type LocalChapterDraft,
+  type ChapterSaveOptions,
   type WritingStorageDump,
   type LocalWritingSettings,
   type StoredChapterVersion,
@@ -80,6 +83,8 @@ export class SqliteWritingStorage implements WritingStorage {
         type SqlPluginModule = { load: (path: string) => Promise<unknown> }
         const Database = ((mod as { default?: SqlPluginModule }).default || mod) as SqlPluginModule
         const connection = await Database.load('sqlite:ew-writing.db') as TauriDatabase
+        // 版本条件写入和历史快照均经过此入口；恢复期间统一禁止新写入，
+        // 不因 Agent 增加并发校验而绕开平台的维护锁。
         const db: TauriDatabase = {
           select: (sql, params) => connection.select(sql, params),
           execute: (sql, params) => trackStorageWrite(() => connection.execute(sql, params)),
@@ -208,21 +213,25 @@ export class SqliteWritingStorage implements WritingStorage {
     return rows.length ? parseStoredChapter(rows[0].payload, key) : null
   }
 
-  async saveChapterLocal(payload: LocalChapterDraft) {
+  async saveChapterLocal(payload: LocalChapterDraft, options?: ChapterSaveOptions) {
     const db = await this.getDb()
     const normalized = normalizeLocalChapterDraft(payload)
     const current = await this.getChapterByIdentity(normalized.userId, normalized.bookId, normalized.chapterId)
+    const storageKey = buildChapterStorageKey(normalized.userId, normalized.bookId, normalized.chapterId)
+    const expectedVersion = options?.expectedLocalVersion ?? Number(current?.localVersion || 0)
+    assertChapterVersion(storageKey, current, expectedVersion)
     const record = {
       ...normalized,
-      storageKey: buildChapterStorageKey(normalized.userId, normalized.bookId, normalized.chapterId),
+      storageKey,
       localVersion: Number(current?.localVersion || normalized.localVersion || 0) + 1,
       updatedAt: normalized.updatedAt || Date.now(),
       // 覆盖写入不得丢备份标记：调用方（同步/播种）没带时沿用旧值，
       // 否则每次覆盖都把章节打回"待备份"，退出备份被击穿成全量。
       lastBackedUpAt: normalized.lastBackedUpAt ?? Number(current?.lastBackedUpAt || 0) ?? 0,
     }
-    await this.upsertChapterRow(db, record)
+    await this.upsertChapterRow(db, record, { version: expectedVersion, exists: Boolean(current) })
     await this.verifyWriteBack(record)
+    // 正文落盘后的检索索引与章节卡由宿主索引器按变更事件维护，这里不再触发
     return record
   }
 
@@ -231,25 +240,35 @@ export class SqliteWritingStorage implements WritingStorage {
    * 四处调用方原本各写各的列，其中两处漏了 lastBackedUpAt——整行 REPLACE 会把它
    * 重置为 0，退出备份被击穿成全量。列一旦分叉就会悄悄丢字段，这里收敛成一处。
    */
-  private async upsertChapterRow(db: TauriDatabase, record: StoredLocalChapterDraft) {
-    await db.execute(
-      `INSERT OR REPLACE INTO chapter_contents
+  private async upsertChapterRow(
+    db: TauriDatabase,
+    record: StoredLocalChapterDraft,
+    expected?: { version: number; exists: boolean },
+  ) {
+    const params: unknown[] = [
+      record.storageKey, String(record.userId), String(record.bookId), Number(record.chapterId),
+      JSON.stringify(record), record.dirty ? 1 : 0, record.conflict ? 1 : 0,
+      Number(record.updatedAt), Number(record.lastBackedUpAt || 0),
+      countDraftWords(record.textContent), countTextWords(record.textContent),
+    ]
+    let sql = `INSERT OR REPLACE INTO chapter_contents
       (storageKey, userId, bookId, chapterId, payload, dirty, conflict, updatedAt, lastBackedUpAt, wordCount, textWordCount)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-      [
-        record.storageKey,
-        String(record.userId),
-        String(record.bookId),
-        Number(record.chapterId),
-        JSON.stringify(record),
-        record.dirty ? 1 : 0,
-        record.conflict ? 1 : 0,
-        Number(record.updatedAt),
-        Number(record.lastBackedUpAt || 0),
-        countDraftWords(record.textContent),
-        countTextWords(record.textContent),
-      ]
-    )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`
+    if (expected?.exists) {
+      // 单条条件 UPDATE 保证比较与保存原子执行；删除后的章节不能被旧编辑器复活。
+      sql = `UPDATE chapter_contents SET userId=$2, bookId=$3, chapterId=$4,
+        payload=json_set($5, '$.lastBackedUpAt', MAX(lastBackedUpAt, $9)),
+        dirty=$6, conflict=$7, updatedAt=$8, lastBackedUpAt=MAX(lastBackedUpAt, $9), wordCount=$10, textWordCount=$11
+        WHERE storageKey=$1 AND COALESCE(json_extract(payload, '$.localVersion'), 0)=$12`
+      params.push(expected.version)
+    } else if (expected) {
+      sql = sql.replace('INSERT OR REPLACE', 'INSERT') + ' ON CONFLICT(storageKey) DO NOTHING'
+    }
+    const result = await db.execute(sql, params) as { rowsAffected: number }
+    if (expected && result.rowsAffected !== 1) {
+      const current = await this.getChapterByIdentity(record.userId, record.bookId, record.chapterId)
+      throw new ChapterVersionConflictError(record.storageKey, expected.version, current?.localVersion ?? null)
+    }
   }
 
   async listChapterVersions(userId: string, bookId: string | number, chapterId: number) {
@@ -425,13 +444,11 @@ export class SqliteWritingStorage implements WritingStorage {
 
   async markChapterBackedUp(userId: string, bookId: string | number, chapterId: number, backupAt: number) {
     const db = await this.getDb()
-    const current = await this.getChapterByIdentity(userId, bookId, chapterId)
-    if (!current) return
-    const nextChapter = {
-      ...current,
-      lastBackedUpAt: Number(backupAt || Date.now()),
-    }
-    await this.upsertChapterRow(db, { ...nextChapter, storageKey: current.storageKey })
+    // 备份只更新标记，不能把备份时读到的旧正文重新整行写回。
+    await db.execute(`UPDATE chapter_contents SET
+      payload=json_set(payload, '$.lastBackedUpAt', MAX(lastBackedUpAt, $2)),
+      lastBackedUpAt=MAX(lastBackedUpAt, $2) WHERE storageKey=$1`,
+    [buildChapterStorageKey(userId, bookId, chapterId), Number(backupAt || Date.now())])
   }
 
   async exportAllRecords(): Promise<WritingStorageDump> {

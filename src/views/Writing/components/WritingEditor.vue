@@ -113,7 +113,7 @@
                 </button>
               </el-tooltip>
             </template>
-            <PreferenceSettingPanel />
+            <PreferenceSettingPanel :book-id="props.bookId" />
           </SmartPopover>
         </div>
         <div class="toolbar-actions">
@@ -205,12 +205,13 @@
     <div
       ref="editorScrollRef"
       class="editor-content"
-      :class="{ 'has-ruler': rulerStyle !== 'none' }"
+      :class="{ 'has-ruler': rulerStyle !== 'none', 'typewriter-mode': typewriterEnabled }"
       @scroll="handleEditorScroll"
     >
       <div
         class="editor-area-wrapper"
-        :style="{ ...editorAreaStyle, ...editorVars }"
+        :class="{ 'focus-mode': focusMode }"
+        :style="{ ...editorAreaStyle, ...editorVars, ...typewriterStyle }"
       >
         <!-- 章节标题 -->
         <input
@@ -495,12 +496,12 @@
           class="sync-now-btn"
           type="button"
           :disabled="workflowLocked || !chapterContentReady || !hasActiveChapter || isManualSyncing"
-          title="保存到本机"
+          :title="hasVersionConflict ? '处理版本冲突' : '保存到本机'"
           @click="syncCurrentChapterNow"
         >
           <i v-if="isManualSyncing" class="fa-solid fa-spinner fa-spin"></i>
           <i v-else class="fa-solid fa-rotate"></i>
-          <span class="sync-btn-label">本地保存</span>
+          <span class="sync-btn-label">{{ hasVersionConflict ? '处理冲突' : '本地保存' }}</span>
         </button>
         <el-popover
           v-if="!workflowMode"
@@ -535,6 +536,10 @@
             <div class="config-item">
               <span class="label">自动补全</span>
               <el-switch v-model="aiConfig.enabled" size="small" />
+            </div>
+            <div class="config-item">
+              <span class="label" title="快捷续写写完后，对照角色资料与故事状态核对一遍，有实质冲突时自动修订">续写后核对设定</span>
+              <el-switch v-model="aiConfig.verify" size="small" />
             </div>
             <div class="panel-divider"></div>
             <div class="config-item column">
@@ -672,10 +677,11 @@ import {
   isAddToChatShortcut,
 } from '@/utils/platform'
 import { showApiError } from '@/utils/api-error'
+import { inkConfirm } from '@/utils/ink-confirm'
 import {
+  ChapterVersionConflictError,
   buildChapterStorageKey,
   getWritingStorage,
-  isTauriRuntime,
   type LocalChapterDraft,
   type StoredLocalChapterDraft,
 } from '@/storage'
@@ -685,6 +691,8 @@ import { getLocalLibraryStorage, LOCAL_USER_ID } from '@/storage/local-library'
 import { useSensitiveCheck } from '../composables/useSensitiveCheck'
 import { useEditorChrome } from '../composables/useEditorChrome'
 import { useEditorFullscreen } from '../composables/useEditorFullscreen'
+import { useTypewriterScroll } from '../composables/useTypewriterScroll'
+import FocusLineExtension, { FOCUS_LINE_REFRESH } from '../extends/FocusLineExtension'
 import { useEditorTypography } from '../composables/useEditorTypography'
 import { useWebKitCaret } from '../composables/useWebKitCaret'
 import { useBubbleMenu } from '../composables/useBubbleMenu'
@@ -707,6 +715,7 @@ import { primeChapterWords, recordAiWordsAdded, recordChapterWords } from '@/sto
 import { isWritingPositionDrifted, readWritingPosition, saveWritingPosition } from '@/storage/local-writing-position'
 import { useWordCount } from '@/composables/use-word-count'
 import { countWords, countTextWords } from '@/utils/word-count'
+import { recordAiSpan } from '@/agent/ai-spans'
 
 // 编辑器样式 Store
 const editorStore = useWritingEditorStore()
@@ -724,6 +733,9 @@ const {
   fontColor,
   typingSound,
   typingEffect,
+  typewriterEnabled,
+  typewriterRatio,
+  focusMode,
   quickPolishToolbarEnabled,
   activeChapterId,
   activeChapterTitle,
@@ -1132,6 +1144,11 @@ const lastSavedTitle = ref('')
 const lastSavedContentJson = ref<unknown>(null)
 const currentChapterVersion = ref(0)
 const currentChapterLocalVersion = ref(0)
+// 保存校验只使用真实本地版本，不使用工作流的 remoteVersion 兼容回退。
+const currentChapterWriteVersion = ref(0)
+const hasVersionConflict = ref(false)
+let preservedConflictSignature = ''
+let resolvingVersionConflict = false
 // 自动生文流式快照是只读预览，不能被本地同步服务当成用户手稿上传。
 const workflowPreviewActive = ref(false)
 let currentSavePromise: Promise<boolean> | null = null
@@ -1200,7 +1217,7 @@ const buildCurrentDraftSnapshot = () => {
     title: activeChapterTitle.value || '',
     textContent: readEditorText(),
     contentJson: editor.value.getJSON(),
-    localVersion: 0,
+    localVersion: currentChapterWriteVersion.value,
     remoteVersion: Number(currentChapterVersion.value || 0),
     baseRemoteVersion: Number(currentChapterVersion.value || 0),
     baseTitle: lastSavedTitle.value || '',
@@ -1270,6 +1287,20 @@ const handleEditorPaste = (view: EditorView, event: ClipboardEvent) => {
 // 3. 编辑器初始化
 // ==========================================
 const editor = ref<Editor>()
+// 打字机模式与专注模式：依赖上面的 editor、滚动容器与输入法状态，放在它们声明之后
+const { typewriterStyle, onTyped: typewriterOnTyped } = useTypewriterScroll({
+  editor,
+  scrollRef: editorScrollRef,
+  enabled: typewriterEnabled,
+  ratio: typewriterRatio,
+  composing: isComposingInput,
+})
+// 专注模式开关切换：派发一次空事务，让"当前段"装饰立刻按新开关重算
+watch(focusMode, () => {
+  const ed = editor.value
+  if (!ed || ed.isDestroyed) return
+  ed.view.dispatch(ed.state.tr.setMeta(FOCUS_LINE_REFRESH, true))
+})
 const readEditorText = (target: Editor | undefined = editor.value) => {
   return target?.getText?.({ blockSeparator: '\n' }) || ''
 }
@@ -1358,6 +1389,7 @@ const {
   onDraftDirty: () => markDraftDirty(),
   onSelectionMenu: () => updateBubbleMenuPosition(),
   onAiTextInserted: text => recordAiInsert(countWords(text), countTextWords(text)),
+  onAiSpanInserted: text => recordAiSpan(props.bookId, activeChapterId.value, text),
 })
 
 const canInsertLibraryWord = computed(() => chapterContentReady.value && workflowManualEditUnlocked.value && !isAiStreaming.value)
@@ -1609,31 +1641,53 @@ const captureLocalVersion = (draft: StoredLocalChapterDraft) => {
   void maybeCaptureLocalVersion(draft)
 }
 
-const snapshotLocalDraft = async () => {
+const snapshotLocalDraft = async (): Promise<boolean> => {
   // 工作流流式片段由服务端 checkpoint 负责恢复，不能写进普通本地草稿表。
   // 否则候选正文落云后，这份旧片段会被同步器误判成“用户本地修改”，每次重写
   // 都会制造一次假冲突。用户在待确认态真正输入时 markDraftDirty 会先关闭预览态，
   // 仍会按普通草稿规则保存，不影响人工改稿保护。
   if (workflowMode.value && workflowPreviewActive.value) return true
-  const snapshot = buildCurrentDraftSnapshot()
-  if (!snapshot) return false
+  // 自动保存、手动保存和退出快照共用串行入口，不能各自拿旧版本并发写。
+  return await saveChapterContent(true)
+}
+
+const preserveConflictDraft = async (draft: LocalChapterDraft) => {
+  const signature = JSON.stringify([draft.userId, draft.bookId, draft.chapterId,
+    draft.localVersion, draft.title, draft.textContent, draft.contentJson])
+  if (signature === preservedConflictSignature) return
+  await writingStorage.saveChapterVersion({
+    userId: draft.userId, bookId: draft.bookId, chapterId: draft.chapterId,
+    source: 'local', title: draft.title, textContent: draft.textContent,
+    contentJson: draft.contentJson, remoteVersion: draft.remoteVersion,
+    remark: `版本冲突保留稿（基于本地版本 ${draft.localVersion}，未覆盖最新正文）`,
+  })
+  preservedConflictSignature = signature
+}
+
+const resolveVersionConflict = async (): Promise<boolean> => {
+  if (resolvingVersionConflict) return false
+  resolvingVersionConflict = true
+  const requestId = latestChapterRequestId
   try {
-    const saved = await writingStorage.saveChapterLocal(snapshot)
-    if (String(activeChapterId.value) === String(saved.chapterId)) {
-      currentChapterLocalVersion.value = workflowContentVersion(saved)
-    }
-    captureLocalVersion(saved)
-    await updateLocalChapterMeta(snapshot)
-    lastSavedContent.value = snapshot.textContent
-    lastSavedTitle.value = snapshot.title
-    lastSavedContentJson.value = saved.contentJson
-    editorStore.setChapterWordCount(countWords(snapshot.textContent))
-    editorStore.setChapterSaveState('local_only', '仅本地保存')
-    return true
+    const snapshot = buildCurrentDraftSnapshot()
+    if (!snapshot) return false
+    await preserveConflictDraft(snapshot)
+    await inkConfirm(
+      '章节已有更新版本。你当前的内容已保存在本章历史记录中，未覆盖最新正文。加载最新版本后，可从历史记录查看、对比或恢复这份保留稿。',
+      '章节版本冲突',
+      { confirmButtonText: '加载最新版本', cancelButtonText: '保留当前编辑', type: 'warning' },
+    )
+    if (isStaleChapterRequest(requestId)) return false
+    const current = buildCurrentDraftSnapshot()
+    if (current) await preserveConflictDraft(current)
+    await loadChapterContent(snapshot.chapterId)
+    await nextTick()
+    return !hasVersionConflict.value
   } catch (error) {
-    console.error('保存本地草稿失败:', error)
-    editorStore.setChapterSaveState('error', '本地保存失败')
+    if (error !== 'cancel' && error !== 'close') showApiError(error, '保留冲突稿失败，请先复制当前内容')
     return false
+  } finally {
+    resolvingVersionConflict = false
   }
 }
 
@@ -1678,6 +1732,7 @@ const updateLocalChapterMeta = async (draft: LocalChapterDraft) => {
 const queueLocalDraftSnapshot = () => {
   if (
     suppressAutoSave.value ||
+    hasVersionConflict.value ||
     !hasActiveChapter.value ||
     !chapterContentReady.value ||
     // 组词期间落盘存的是拼音；compositionend 会再调一次 markDraftDirty 补上。
@@ -1704,12 +1759,17 @@ const hasUnsavedChanges = () => {
     return false
   const text = readEditorText()
   const title = activeChapterTitle.value
-  return text !== lastSavedContent.value || title !== lastSavedTitle.value
+  return hasVersionConflict.value || text !== lastSavedContent.value || title !== lastSavedTitle.value ||
+    JSON.stringify(editor.value.getJSON()) !== JSON.stringify(lastSavedContentJson.value)
 }
 
 const markDraftDirty = () => {
   if (workflowLocked.value || !chapterContentReady.value) return
   workflowPreviewActive.value = false
+  if (hasVersionConflict.value) {
+    editorStore.setChapterSaveState('conflict', '版本冲突，请处理后继续保存')
+    return
+  }
   editorStore.setChapterSaveState('local_only', '仅本地保存')
   queueLocalDraftSnapshot()
 }
@@ -1717,9 +1777,11 @@ const markDraftDirty = () => {
 const saveChapterContent = async (
   silent = false,
   options?: { forceSync?: boolean; runPostProcess?: boolean; saveHistory?: boolean },
-) => {
+): Promise<boolean> => {
   if (currentSavePromise) {
-    return await currentSavePromise
+    const saved = await currentSavePromise
+    if (!saved) return false
+    return hasUnsavedChanges() ? await saveChapterContent(silent, options) : true
   }
   // 识别期与当前生成章只接收工作流快照，普通草稿保存不得覆盖服务端生成正文。
   if (workflowLocked.value) return true
@@ -1727,13 +1789,23 @@ const saveChapterContent = async (
     return false
   clearLocalDraftTimer()
 
+  if (hasVersionConflict.value) {
+    if (!silent) return await resolveVersionConflict()
+    const snapshot = buildCurrentDraftSnapshot()
+    try {
+      if (snapshot) await preserveConflictDraft(snapshot)
+    } catch (error) {
+      showApiError(error, '保留冲突稿失败，请先复制当前内容')
+    }
+    return false
+  }
+
   const text = readEditorText()
   const title = activeChapterTitle.value
 
   if (!silent && !text && !title) return true
   if (
-    text === lastSavedContent.value &&
-    title === lastSavedTitle.value &&
+    !hasUnsavedChanges() &&
     !options?.forceSync
   ) {
     editorStore.setChapterSaveState('local_only', '仅本地保存')
@@ -1747,27 +1819,47 @@ const saveChapterContent = async (
   // 历史 bug：释放只写在云端分支的 finally 里，而「仅本地」模式永远在到达它之前
   // 就 return 了，于是首次保存之后本地模式的落盘全部失效。
   currentSavePromise = (async () => {
+    const requestId = latestChapterRequestId
     try {
       lastChapterSaveError.value = ''
       const snapshot = buildCurrentDraftSnapshot()
       if (!snapshot) return false
       editorStore.setChapterSaveState('local_only', '仅本地保存')
       const localDraft = await writingStorage
-        .saveChapterLocal(snapshot)
-        .catch((error) => {
+        .saveChapterLocal(snapshot, { expectedLocalVersion: snapshot.localVersion })
+        .catch(async (error) => {
           console.error('保存本地草稿失败:', error)
-          editorStore.setChapterSaveState('error', '本地保存失败')
+          if (error instanceof ChapterVersionConflictError) {
+            if (!isStaleChapterRequest(requestId)) {
+              hasVersionConflict.value = true
+              lastChapterSaveError.value = error.message
+              pendingLocalDraftSnapshot = false
+              clearLocalDraftTimer()
+              editorStore.setChapterSaveState('conflict', '版本冲突，请点击处理冲突')
+            }
+            try {
+              await preserveConflictDraft(snapshot)
+              ElMessage.warning('章节已有新版本，当前修改已保存在历史记录中，请处理冲突')
+            } catch (historyError) {
+              showApiError(historyError, '冲突稿未能保留，请先复制当前内容')
+            }
+          } else {
+            lastChapterSaveError.value = String(error?.message || '本地保存失败')
+            editorStore.setChapterSaveState('error', '本地保存失败')
+          }
           return null
         })
       if (!localDraft) return false
-      if (String(activeChapterId.value) === String(localDraft.chapterId)) {
+      if (!isStaleChapterRequest(requestId)) {
         currentChapterLocalVersion.value = workflowContentVersion(localDraft)
+        currentChapterWriteVersion.value = Number(localDraft.localVersion || 0)
       }
       captureLocalVersion(localDraft)
 
       const wordLen = countWords(text)
       editorStore.setChapterWordCount(wordLen)
       await updateLocalChapterMeta(snapshot)
+      if (isStaleChapterRequest(requestId)) return true
       lastSavedContent.value = text
       lastSavedTitle.value = title
       lastSavedContentJson.value = localDraft.contentJson
@@ -1784,7 +1876,9 @@ const saveChapterContent = async (
     }
   })()
 
-  return await currentSavePromise
+  const saved = await currentSavePromise
+  // 保存期间仍有新输入时，将其继续落盘后才允许切章或退出。
+  return saved && hasUnsavedChanges() ? await saveChapterContent(silent, options) : saved
 }
 
 const ensurePersisted = async (options?: EnsurePersistedOptions) => {
@@ -1804,10 +1898,14 @@ const planVisibilityHandler = () => {
 }
 const planFocusHandler = () => planStore.setPageActive(true)
 const planBlurHandler = () => planStore.setPageActive(false)
-const beforeUnloadHandler = () => {
+const beforeUnloadHandler = (event: BeforeUnloadEvent) => {
   planStore.flushReport(true)
   if (hasUnsavedChanges()) {
     void snapshotLocalDraft()
+    if (hasVersionConflict.value) {
+      event.preventDefault()
+      event.returnValue = ''
+    }
   }
 }
 
@@ -1825,6 +1923,7 @@ const loadChapterContent = async (chapterId: number) => {
   suppressAutoSave.value = true
   workflowPreviewActive.value = false
   currentChapterLocalVersion.value = 0
+  currentChapterWriteVersion.value = 0
   clearChapterReady()
   clearEditorStateSyncTimer()
   // 切章即掐掉在途的续写/补全流，旧章的产物不该再消耗与插入
@@ -1863,6 +1962,7 @@ const loadChapterContent = async (chapterId: number) => {
     const title = localDraft?.title || activeChapterTitle.value || ''
     currentChapterVersion.value = Number(localDraft?.remoteVersion || localDraft?.baseRemoteVersion || 0)
     currentChapterLocalVersion.value = workflowContentVersion(localDraft)
+    currentChapterWriteVersion.value = Number(localDraft?.localVersion || 0)
     editorStore.setChapterTitle(title)
     editorStore.resetLocalSessionWords()
     createEditorInstance(localDraft?.contentJson ?? localDraft?.textContent ?? EMPTY_EDITOR_DOC)
@@ -1871,7 +1971,10 @@ const loadChapterContent = async (chapterId: number) => {
       const text = readEditorText()
       lastSavedContent.value = text
       lastSavedTitle.value = title
-      lastSavedContentJson.value = localDraft?.contentJson ?? null
+      // 以编辑器实际规范化后的文档作为干净基线，避免旧纯文本记录误判为格式修改。
+      lastSavedContentJson.value = editor.value?.getJSON() ?? null
+      hasVersionConflict.value = false
+      preservedConflictSignature = ''
       currentChapterStorageUserId.value = LOCAL_USER_ID
       markChapterReady(chapterId)
       restoreWritingPosition(chapterId)
@@ -1927,6 +2030,9 @@ watch(
       lastSavedContentJson.value = null
       currentChapterVersion.value = 0
       currentChapterLocalVersion.value = 0
+      currentChapterWriteVersion.value = 0
+      hasVersionConflict.value = false
+      preservedConflictSignature = ''
       pendingLocalDraftSnapshot = false
       editorStore.setActiveChapterTextContent('')
       editorStore.setChapterWordCount(0)
@@ -2065,7 +2171,10 @@ const createEditorInstance = (content: unknown) => {
             !workflowMode.value && workflowManualEditUnlocked.value && !wordLibraryVisible.value,
           onFetchSuggestion: fetchAiSuggestion,
           onCancelRequest: cancelAiSuggestion,
-          onAcceptSuggestion: text => recordAiInsert(countWords(text), countTextWords(text)),
+          onAcceptSuggestion: text => {
+            recordAiInsert(countWords(text), countTextWords(text))
+            recordAiSpan(props.bookId, activeChapterId.value, text)
+          },
           debounceMin: 1200,
           debounceMax: 1800,
           minRequestInterval: 8000,
@@ -2073,6 +2182,7 @@ const createEditorInstance = (content: unknown) => {
           rateLimitCooldown: 60000,
         }),
         PersistentSelectionExtension,
+        FocusLineExtension.configure({ enabled: () => focusMode.value }),
         AiReviewExtension,
         FindReplace,
         EntityHighlightExtension,
@@ -2140,6 +2250,8 @@ const createEditorInstance = (content: unknown) => {
           !isPasteDrop &&
           !isCut &&
           isUserSourceRecent
+        // 打字机模式：键盘改动（含回车、删除）落定后把光标滚回基准线；粘贴、拖入不算打字
+        if (transaction?.docChanged && isKeyboardEdit) typewriterOnTyped()
         if (
           transaction?.docChanged &&
           (isUserTextInput || isKeyboardEdit || isCut || isPasteDrop)
@@ -2272,6 +2384,7 @@ const handleAiDone = (payload: {
   const aiDelta = Math.max(0, countWords(insertedText) - countWords(payload.original))
   const textAiDelta = Math.max(0, countTextWords(insertedText) - countTextWords(payload.original))
   if (aiDelta || textAiDelta) recordAiInsert(aiDelta, textAiDelta)
+  recordAiSpan(props.bookId, activeChapterId.value, insertedText)
   if (!workflowManualEditUnlocked.value) return
   isBubbleMenuVisible.value = false
   reviewData.value = {
@@ -2490,6 +2603,7 @@ const settleWorkflowGeneratedText = async (chapterId: number): Promise<boolean> 
   workflowPreviewActive.value = false
   currentChapterVersion.value = Number(draft.remoteVersion || draft.baseRemoteVersion || 0)
   currentChapterLocalVersion.value = workflowContentVersion(draft)
+  currentChapterWriteVersion.value = Number(draft.localVersion || 0)
   lastSavedContent.value = readEditorText()
   lastSavedTitle.value = activeChapterTitle.value
   lastSavedContentJson.value = draft.contentJson
@@ -2620,9 +2734,8 @@ const syncCurrentChapterNow = async () => {
   )
     return
   isManualSyncing.value = true
-  editorStore.setChapterSaveState('local_only', '仅本地保存')
   try {
-    await snapshotLocalDraft()
+    await saveChapterContent(false)
   } finally {
     isManualSyncing.value = false
   }
@@ -2642,6 +2755,10 @@ const chapterContentRefreshHandler = (event: Event) => {
     ).detail || {}
   const chapterId = Number(detail.chapterId || 0)
   if (!chapterId || chapterId !== Number(activeChapterId.value || 0)) return
+  if (!workflowPreviewActive.value && (hasUnsavedChanges() || currentSavePromise)) {
+    void snapshotLocalDraft()
+    return
+  }
   void loadChapterContent(chapterId)
 }
 

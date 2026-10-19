@@ -20,7 +20,7 @@
           <div><dt>来源版本</dt><dd>{{ inspection.manifest.appVersion || '未知' }} · {{ inspection.manifest.platform }}</dd></div>
           <div><dt>作品</dt><dd>{{ counts.books }} 本 · {{ counts.chapters }} 章 · 版本历史 {{ counts.versions }} 条</dd></div>
           <div><dt>资料</dt><dd>{{ idbSummary }}</dd></div>
-          <div><dt>其它</dt><dd>字体 {{ counts.fonts }} 个 · 提示词文档 {{ inspection.promptCount }} 个 · 配置项 {{ counts.localStorageKeys }} 项</dd></div>
+          <div><dt>其它</dt><dd>字体 {{ counts.fonts }} 个 · 提示词与技能文件 {{ inspection.promptCount }} 个 · 配置项 {{ counts.localStorageKeys }} 项</dd></div>
         </dl>
 
         <div class="restore-modes">
@@ -47,7 +47,7 @@
       </template>
 
       <div v-if="done && report" class="restore-done">
-        <p><i class="fa-solid fa-circle-check"></i> 恢复完成：作品 {{ report.books }} 本、章节 {{ report.chapters }} 章、版本历史 {{ report.versions }} 条、字体 {{ report.fonts }} 个、提示词文档 {{ report.prompts }} 个。</p>
+        <p><i class="fa-solid fa-circle-check"></i> 恢复完成：作品 {{ report.books }} 本、章节 {{ report.chapters }} 章、版本历史 {{ report.versions }} 条、字体 {{ report.fonts }} 个、提示词与技能文件 {{ report.prompts }} 个。</p>
         <p v-if="reportIdbSummary">{{ reportIdbSummary }}</p>
         <p v-for="warning in report.warnings" :key="warning" class="restore-done-path">{{ warning }}</p>
         <p v-if="report.safetyBackupPath" class="restore-done-path">恢复前的安全备份：{{ report.safetyBackupPath }}</p>

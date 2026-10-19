@@ -478,7 +478,7 @@ const saveCharacter = async () => {
     }
     const { data } = wasCreating
       ? await addCharacterApi({ bookId: String(props.bookId), ...payload })
-      : await updateCharacterApi({ id: selectedCharacterId.value!, ...payload })
+      : await updateCharacterApi({ id: selectedCharacterId.value!, ...payload }, selectedCharacter.value || undefined)
     await loadCharacters(data.id)
     emit('lore-updated')
     ElMessage.success(wasCreating ? '角色已新增' : '角色已保存')

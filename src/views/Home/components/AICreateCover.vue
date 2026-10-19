@@ -256,6 +256,9 @@ const props = defineProps<{
   visible: boolean
   bookId?: number
   bookTitle?: string
+  /** Agent 封面方案带进来的画面描述与风格；作者已经填了内容时不覆盖 */
+  initialPrompt?: string
+  initialStyle?: string
 }>()
 
 const emit = defineEmits<{
@@ -1139,6 +1142,12 @@ watch(
       }
       if (props.bookId && !selectedBookId.value) {
         selectedBookId.value = String(props.bookId)
+      }
+      if (props.initialPrompt && !imageForm.prompt.trim()) {
+        imageForm.prompt = props.initialPrompt
+      }
+      if (props.initialStyle && !imageForm.style && styleOptions.some(option => option.value === props.initialStyle)) {
+        imageForm.style = props.initialStyle
       }
       if (!selectedBookId.value && props.bookTitle) {
         const title = props.bookTitle.trim()

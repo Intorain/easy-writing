@@ -12,6 +12,7 @@ import { getWritingStorage } from './index'
 import { getLocalLibraryStorage, LOCAL_USER_ID } from './local-library'
 import {
   applyDefined,
+  applyCheckedFields,
   bySortNo,
   findBookIdByEntity,
   idSet,
@@ -76,14 +77,14 @@ export const addLocalOutlineNode = async (payload: Partial<OutlineNode>) => {
   })
 }
 
-export const updateLocalOutlineNode = async (payload: Partial<OutlineNode> & { id?: number }) => {
+export const updateLocalOutlineNode = async (payload: Partial<OutlineNode> & { id?: number }, expected?: Partial<OutlineNode>) => {
   if (payload.id === undefined) throw new Error('缺少大纲节点 id')
   const bookId = await findBookIdByEntity(payload.id, doc => doc.outlineNodes)
   return mutateDoc(bookId, doc => {
     const node = doc.outlineNodes.find(item => item.id === payload.id)
     if (!node) throw new Error('大纲节点不存在')
     const { id: _id, bookId: _bookId, children: _children, ...fields } = payload
-    applyDefined(node, fields)
+    applyCheckedFields(node, fields, expected)
     return ok(node)
   })
 }
@@ -144,6 +145,7 @@ export const addLocalCharacter = async (payload: Partial<Character>) => {
       personality: payload.personality ?? '',
       background: payload.background ?? '',
       ability: payload.ability ?? '',
+      voice: payload.voice ?? '',
       relationships: payload.relationships ?? null,
       sortNo: payload.sortNo ?? doc.characters.length + 1,
     }
@@ -152,14 +154,14 @@ export const addLocalCharacter = async (payload: Partial<Character>) => {
   })
 }
 
-export const updateLocalCharacter = async (payload: Partial<Character> & { id?: number }) => {
+export const updateLocalCharacter = async (payload: Partial<Character> & { id?: number }, expected?: Partial<Character>) => {
   if (payload.id === undefined) throw new Error('缺少角色 id')
   const bookId = await findBookIdByEntity(payload.id, doc => doc.characters)
   return mutateDoc(bookId, doc => {
     const character = doc.characters.find(item => item.id === payload.id)
     if (!character) throw new Error('角色不存在')
     const { id: _id, bookId: _bookId, ...fields } = payload
-    applyDefined(character, fields)
+    applyCheckedFields(character, fields, expected)
     character.aliases = normalizeCharacterAliases(character.name, character.aliases)
     return ok(character)
   })
@@ -268,14 +270,14 @@ export const addLocalWorldSetting = async (payload: Partial<WorldSetting>) => {
   })
 }
 
-export const updateLocalWorldSetting = async (payload: Partial<WorldSetting> & { id?: number }) => {
+export const updateLocalWorldSetting = async (payload: Partial<WorldSetting> & { id?: number }, expected?: Partial<WorldSetting>) => {
   if (payload.id === undefined) throw new Error('缺少设定 id')
   const bookId = await findBookIdByEntity(payload.id, doc => doc.worldSettings)
   return mutateDoc(bookId, doc => {
     const setting = doc.worldSettings.find(item => item.id === payload.id)
     if (!setting) throw new Error('设定不存在')
     const { id: _id, bookId: _bookId, ...fields } = payload
-    applyDefined(setting, fields)
+    applyCheckedFields(setting, fields, expected)
     return ok(setting)
   })
 }

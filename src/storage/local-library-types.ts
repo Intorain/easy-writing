@@ -196,7 +196,8 @@ export interface LocalLibraryStorage {
   /** 只凭章节 id 反查（单章重写等入口只有 chapterId，没有 bookId） */
   getLocalChapterById(id: number): Promise<LocalChapter | null>
   deleteLocalChapter(ids: number[]): Promise<void>
-  sortLocalChapters(payload: { volumeId: number | string; chapterIds: number[] }): Promise<void>
+  /** 按给定顺序重编序号；`keepTime` 时不改章节与书的修改时间（进书时修旧数据用） */
+  sortLocalChapters(payload: { volumeId: number | string; chapterIds: number[] }, options?: { keepTime?: boolean }): Promise<void>
   /** 返回刷新后的书籍统计，调用方据此更新书籍总字数，不必再触发整棵目录树重载 */
   updateLocalChapterContentMeta(payload: { bookId: number | string; chapterId: number; wordCount: number; title?: string }): Promise<LocalBook | null | undefined>
 }

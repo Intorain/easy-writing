@@ -11,8 +11,8 @@ import { LOCAL_USER_ID, createLocalEntityId } from '@/storage/local-library-util
 import type { LocalChapter, LocalLibraryVolume } from '@/storage/local-library-types'
 import {
   readLocalWorkflowRun,
-  writeLocalWorkflowRun,
   writeLocalWorkflowTask,
+  settleLocalWorkflowTask,
   type LocalWorkflowRun,
 } from '@/storage/local-workflow'
 import { getWritingStorage } from '@/storage'
@@ -24,7 +24,16 @@ import {
   streamLocalChatCompletion,
   LONG_COMPLETION_TIMEOUT_MS,
 } from '@/utils/local-ai-client'
-import { runLocalChapterQualityCheck } from '@/utils/local-quality-check'
+import { runDraftGuard, summarizeStateFacts, type DraftIssue } from '@/ai/verify/consistency'
+import { aiFactsOpenForeshadows, aiFactsQuery } from '@/storage/ai-facts'
+import { canUseAiIndex } from '@/storage/ai-index'
+import { buildNotesContext } from '@/storage/ai-notes'
+import { mergeAgentGate, runLocalChapterQualityCheck } from '@/utils/local-quality-check'
+import type { QualityReport } from '@/types/canon'
+import { agentCommand } from '@/agent/client'
+import { editorContext } from '@/agent/writing-context'
+import { isTauriRuntime } from '@/storage/writing-storage'
+import { beatLine, hookLine } from '@/views/Writing/components/workflow-rail/outline-model'
 import {
   buildLocalWorkflowEvent,
   emitLocalWorkflowEvent,
@@ -199,13 +208,60 @@ const describeVolumeStages = (volume: LocalLibraryVolume) => {
     .join('\n')
 }
 
+// 细纲兼容两种形状：旧的 { beats: string[], endHook: string }，以及 Agent 拍子 BeatsPlan（beats 为对象、钩子带 text）
 const readBeats = (chapter: LocalChapter) => {
   const expanded = chapter.planMeta?.expandedOutline as Record<string, unknown> | null | undefined
   if (!expanded || typeof expanded !== 'object' || !Array.isArray(expanded.beats)) return null
-  const beats: string[] = expanded.beats.map(asText).filter(Boolean)
+  const beats: string[] = expanded.beats.map(beatLine).filter(Boolean)
   if (!beats.length) return null
-  return { beats, endHook: asText(expanded.endHook) }
+  return { beats, endHook: hookLine(expanded.endHook) }
 }
+
+/** 本地规则质检 + Agent 质量门；桌面端才有后者，调用失败时只用本地结果 */
+const runChapterGate = async (params: Parameters<typeof runLocalChapterQualityCheck>[0] & { bookId: string }) => {
+  const notice = runLocalChapterQualityCheck(params)
+  if (!isTauriRuntime()) return notice
+  try {
+    const report = await agentCommand<QualityReport>('quality_check', {
+      bookId: params.bookId,
+      chapterId: String(params.chapterId),
+      text: params.text,
+    })
+    return mergeAgentGate(notice, report)
+  } catch {
+    return notice
+  }
+}
+
+/** 截至上一章整理出的故事状态：人物当前位置/境界/持有物与未回收伏笔，写下一章时以此为准 */
+const describeStoryState = async (bookId: string, previousChapterId: number | null) => {
+  if (!canUseAiIndex() || !previousChapterId) return ''
+  try {
+    const [facts, open] = await Promise.all([
+      aiFactsQuery(bookId, { kinds: ['state', 'relation'], untilChapterId: previousChapterId, limit: 120 }),
+      aiFactsOpenForeshadows(bookId, previousChapterId),
+    ])
+    const state = summarizeStateFacts(facts, 1600)
+    const hooks = open.slice(-6).map(fact => `- ${fact.storyOrder ? `第${fact.storyOrder}章` : '前文'}：${fact.text}`).join('\n')
+    return [state, hooks ? `未回收的伏笔（可考虑推进或回收，不必全部处理）：\n${hooks}` : ''].filter(Boolean).join('\n')
+  } catch (error) {
+    console.warn('读取故事状态失败，本章不附带', error)
+    return ''
+  }
+}
+
+/** 校验结果并入质检卡：修订后仍存在的问题以 critic 来源列出，不阻断流程 */
+const criticIssues = (issues: DraftIssue[]) =>
+  issues.map(issue => ({
+    source: 'critic' as const,
+    code: `critic_${issue.type}`,
+    dimension: '设定一致性',
+    message: issue.text,
+    severity: issue.severity === 'high' ? ('high' as const) : ('low' as const),
+    blocking: false,
+    quotes: issue.quote ? [issue.quote] : [],
+    fix: issue.suggestion || undefined,
+  }))
 
 /** 正文提示词素材（常规生成 / 断点续写 / 按要求重写共用） */
 const buildChapterMaterials = async (params: {
@@ -224,14 +280,19 @@ const buildChapterMaterials = async (params: {
   }
   const beats = readBeats(chapter)
   const writingRules = asText(run.config?.writingRules)
+  // 作者规则、否决约束、出场人物当前状态、未回收线索，来自 Agent 记忆索引；没有索引数据时为空
+  const canonState = await editorContext(chapter.bookId, chapter.id, 'write')
   return {
     '写作参数': describeRunConfig(run),
     '写作规则（必须遵守，优先级最高）': writingRules,
+    '作者备忘（规则与决定，必须遵守）': await buildNotesContext(chapter.bookId),
+    '作品状态（来自记忆索引）': canonState,
     '作品大纲': describeOutlineBrief(run),
     '主要人物': await loadCharacterContext(chapter.bookId, [chapter.title, chapter.summary, previousTail].join('\n'), true),
     '力量体系': brief.power,
     '故事线': brief.storylines,
     '本卷规划': [`卷《${volume.title}》：${asText(volume.summary)}`, describeVolumeStages(volume)].filter(Boolean).join('\n'),
+    '故事状态（截至上一章，以此为准）': await describeStoryState(chapter.bookId, previousChapter?.id ?? null),
     '前情': previousTail,
     '本章章纲': `第${chapter.sortNo}章《${chapter.title}》：${asText(chapter.summary)}`,
     '本章细纲': beats ? [...beats.beats.map((beat, i) => `${i + 1}. ${beat}`), beats.endHook ? `章末钩子：${beats.endHook}` : ''].filter(Boolean).join('\n') : '',
@@ -401,13 +462,13 @@ const ensureChapterBeats = async (
     }),
   })
   const parsed = parseAiJson(data, ['beats'])
-  const beats = Array.isArray(parsed?.beats) ? parsed.beats.map(asText).filter(Boolean) : []
+  const beats = Array.isArray(parsed?.beats) ? parsed.beats.map(beatLine).filter(Boolean) : []
   if (!beats.length) return chapter
   const updated = await getLocalLibraryStorage().updateLocalChapter({
     id: chapter.id,
     planMeta: {
       ...(chapter.planMeta || {}),
-      expandedOutline: { beats: beats.slice(0, 10), endHook: asText(parsed?.endHook) },
+      expandedOutline: { beats: beats.slice(0, 10), endHook: hookLine(parsed?.endHook) },
       outlineSource: 'phase_a',
     },
   })
@@ -479,17 +540,6 @@ const buildCheckpoint = (chapterId: number, contentText: string, seq: number) =>
 })
 
 /** 任务进入终态时同步 run 的活跃指针（canceled/succeeded 摘掉，其余保留可恢复） */
-const settleRunActiveTask = async (runId: number, taskId: number, status: string) => {
-  const run = await readLocalWorkflowRun(runId)
-  if (!run) return
-  if (['canceled', 'succeeded'].includes(status) && Number(run.activeTaskId || 0) === Number(taskId)) {
-    run.activeTaskId = null
-    if (status === 'succeeded') run.status = 'completed'
-    if (status === 'canceled') run.status = 'canceled'
-    await writeLocalWorkflowRun(run)
-  }
-}
-
 // ---------------------------------------------------------------------------
 // 单章重写腿（写作台重写面板发起；独立于整书循环）
 // ---------------------------------------------------------------------------
@@ -571,7 +621,8 @@ export const launchLocalChapterRewrite = (task: WorkflowTask, options: { instruc
       const contentVersion = original.contentVersion + 1
       await saveGeneratedChapterContent({ bookId, chapterId, title: chapter.title, text: fullText, contentVersion })
       await getLocalLibraryStorage().updateLocalChapter({ id: chapterId, workflowStatus: 'review_required' })
-      const notice = runLocalChapterQualityCheck({
+      const notice = await runChapterGate({
+        bookId: String(bookId),
         chapterId,
         chapterNo: Number(chapter.sortNo || 0),
         chapterTitle: chapter.title,
@@ -688,8 +739,7 @@ const runWriterLoop = async (initial: WorkflowTask, flags: WriterFlags) => {
       canResume: ['paused', 'interrupted', 'failed'].includes(status),
       canCancel: ['paused', 'interrupted', 'failed', 'review_required'].includes(status),
     }
-    await persistTask(task)
-    await settleRunActiveTask(runId, taskId, status)
+    await settleLocalWorkflowTask(task)
   }
 
   while (true) {
@@ -759,7 +809,8 @@ const runWriterLoop = async (initial: WorkflowTask, flags: WriterFlags) => {
       // 新任务（继续生成）接手旧的待确认章时，任务上还没有质检卡——按存量正文重建
       if (Number(task.payload?.qualityReview?.chapterId || 0) !== chapter.id) {
         const stored = await readChapterText(bookId, chapter.id)
-        const notice = runLocalChapterQualityCheck({
+        const notice = await runChapterGate({
+          bookId: String(bookId),
           chapterId: chapter.id,
           chapterNo: Number(chapter.sortNo || 0),
           chapterTitle: chapter.title,
@@ -923,11 +974,38 @@ const runWriterLoop = async (initial: WorkflowTask, flags: WriterFlags) => {
       return
     }
 
+    // 生成—校验—修订：对照故事状态、角色资料与写作规则审一遍，有实质冲突就最小改动修订后再落库
+    let guard: Awaited<ReturnType<typeof runDraftGuard>> | null = null
+    try {
+      flags.abort = new AbortController()
+      emit('stage', { message: `正在核对第${chapter.sortNo}章与设定是否一致` })
+      const previousTail = previousChapter ? (await readChapterText(bookId, previousChapter.id)).text.slice(-PREV_CHAPTER_TAIL_CHARS) : ''
+      guard = await runDraftGuard({
+        bookId,
+        chapterId: chapter.id,
+        draft: fullText,
+        previousTail,
+        modelCode,
+        rules: asText(run.config?.writingRules),
+        signal: flags.abort.signal,
+        onStage: stage => emit('stage', { message: stage === 'revise' ? `发现设定冲突，正在修订第${chapter.sortNo}章` : `正在核对第${chapter.sortNo}章与设定是否一致` }),
+      })
+      if (guard.revised) {
+        fullText = guard.text
+        emitSnapshot(fullText)
+      }
+    } catch (error) {
+      console.warn('正文核对失败，按原稿继续', error)
+    } finally {
+      flags.abort = null
+    }
+
     // 落库 + 质检
     const contentVersion = (await readChapterText(bookId, chapter.id)).contentVersion + 1
     await saveGeneratedChapterContent({ bookId, chapterId: chapter.id, title: chapter.title, text: fullText, contentVersion })
     emitSnapshot(fullText, true)
-    const notice = runLocalChapterQualityCheck({
+    const notice = await runChapterGate({
+      bookId: String(bookId),
       chapterId: chapter.id,
       chapterNo: Number(chapter.sortNo || 0),
       chapterTitle: chapter.title,
@@ -936,6 +1014,14 @@ const runWriterLoop = async (initial: WorkflowTask, flags: WriterFlags) => {
       contentVersion,
       modelCode,
     })
+    if (guard) {
+      notice.critic = guard.status === 'ok'
+        ? { status: 'available', ...(guard.error ? { error: guard.error } : {}) }
+        : { status: 'unavailable', error: guard.error || '未能核对' }
+      // 已修订的问题不再列出；没修订（只有低严重度或修订失败）的留给作者看
+      if (!guard.revised && guard.issues.length) notice.issues.push(...criticIssues(guard.issues))
+    }
+    // 这一章的故事状态由宿主索引器按保存事件自动整理，下一章规划前即可用上
     const words = countWords(fullText)
     const finished = Number(task.finishedChapters || 0)
     const total = Math.max(Number(task.totalChapters || 0), finished + work.pendingInVolume.length)

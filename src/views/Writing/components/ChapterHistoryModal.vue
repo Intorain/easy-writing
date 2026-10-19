@@ -412,6 +412,13 @@ const restoreLocalVersion = async () => {
   const userId = resolveHistoryUserId()
   const bookId = String(props.bookId || '')
   const current = await storage.getChapterByIdentity(userId, bookId, Number(props.chapterId))
+  if (current) {
+    await storage.saveChapterVersion({
+      userId, bookId, chapterId: current.chapterId, source: 'local',
+      title: current.title, textContent: current.textContent, contentJson: current.contentJson,
+      remoteVersion: current.remoteVersion, remark: '历史恢复前快照',
+    })
+  }
   await storage.saveChapterLocal({
     ...(current || {}),
     userId,
@@ -430,7 +437,7 @@ const restoreLocalVersion = async () => {
     conflict: false,
     localOnly: true,
     updatedAt: Date.now(),
-  })
+  }, { expectedLocalVersion: Number(current?.localVersion || 0) })
   // 重置节流基线：刚恢复的内容与上一版差异必然很大，不重置会立刻再存一版。
   resetLocalVersionMark(buildChapterStorageKey(userId, bookId, Number(props.chapterId)))
 }

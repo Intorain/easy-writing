@@ -6,6 +6,7 @@ import { isTauriRuntime } from '@/storage'
 import { fetchQimaoRankPage } from '@/utils/local-rank-qimao'
 import { fetchQidianRank } from '@/utils/local-rank-qidian'
 import { crawlRankPageViaWindow } from '@/utils/local-rank-window'
+import { throwIfAborted } from '@/utils/abortable'
 
 /**
  * 榜单本机爬虫（移植自老服务端 statistics/service/rank 的番茄/七猫适配器）。
@@ -30,20 +31,26 @@ const resolveCrawlFetch = async (): Promise<FetchLike> => {
   throw new Error('榜单抓取是桌面版功能：浏览器受跨域限制无法直接访问平台站点，请在桌面客户端使用')
 }
 
-const fetchWithTimeout = async (url: string, init: RequestInit) => {
+const fetchWithTimeout = async (url: string, init: RequestInit, signal?: AbortSignal) => {
+  throwIfAborted(signal)
   const crawlFetch = await resolveCrawlFetch()
   const controller = new AbortController()
+  const abort = () => controller.abort()
+  signal?.addEventListener('abort', abort, { once: true })
+  if (signal?.aborted) abort()
   const timer = window.setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
   try {
     const response = await crawlFetch(url, { ...init, signal: controller.signal })
     if (!response.ok) throw new Error(`目标站返回 HTTP ${response.status}`)
     return response
   } catch (error) {
+    throwIfAborted(signal)
     if (error instanceof DOMException && error.name === 'AbortError') {
       throw new Error(`抓取超时（${FETCH_TIMEOUT_MS / 1000} 秒无响应）`)
     }
     throw error instanceof Error ? error : new Error(String(error))
   } finally {
+    signal?.removeEventListener('abort', abort)
     window.clearTimeout(timer)
   }
 }
@@ -228,7 +235,7 @@ export const parseFanqieRankHtml = (html: string): { pageTitle: string; cutoffTe
   return { pageTitle, cutoffText, items }
 }
 
-const fetchFanqieRank = async (url: string, maxPages: number) => {
+const fetchFanqieRank = async (url: string, maxPages: number, signal?: AbortSignal) => {
   // 多页配置走隐藏窗口滚动懒加载（SSR 只给首屏 10 条）；
   // 窗口方案失败或未配置多页时退回直取首屏，宁少勿断
   if (maxPages > 1 && isTauriRuntime()) {
@@ -236,9 +243,10 @@ const fetchFanqieRank = async (url: string, maxPages: number) => {
       const html = await crawlRankPageViaWindow(url, {
         waitSelector: '.muye-rank-book-list .rank-book-item',
         scrollRounds: Math.min(Math.max(maxPages * 6, 6), 30),
-      })
+      }, signal)
       return parseFanqieRankHtml(html)
     } catch (error) {
+      throwIfAborted(signal)
       console.warn('番茄懒加载抓取失败，退回首屏直取', error)
     }
   }
@@ -250,7 +258,7 @@ const fetchFanqieRank = async (url: string, maxPages: number) => {
       Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       Referer: 'https://fanqienovel.com/',
     },
-  })
+  }, signal)
   return parseFanqieRankHtml(await response.text())
 }
 
@@ -304,15 +312,16 @@ export const parseQimaoRankJson = (input: unknown): NovelRankItem[] => {
   return items
 }
 
-const fetchQimaoRank = async (baseUrl: string, maxPages: number) => {
+const fetchQimaoRank = async (baseUrl: string, maxPages: number, signal?: AbortSignal) => {
   const items: NovelRankItem[] = []
   const seen = new Set<string>()
   for (let page = 1; page <= Math.max(1, Math.min(maxPages, 5)); page += 1) {
+    throwIfAborted(signal)
     const url = new URL(baseUrl)
     // 日榜固定年月会把快照写旧：清掉 date 用实时榜（继承老适配器口径）
     if (String(url.searchParams.get('date_type') || '') === '1') url.searchParams.set('date', '')
     url.searchParams.set('page', String(page))
-    const pageItems = parseQimaoRankJson(await fetchQimaoRankPage(url.toString()))
+    const pageItems = parseQimaoRankJson(await fetchQimaoRankPage(url.toString(), signal))
     if (!pageItems.length) break
     for (const item of pageItems) {
       const key = item.bookId || item.bookUrl
@@ -337,10 +346,11 @@ export interface CrawledRank {
 }
 
 /** 抓取一个榜单源（按站点分派适配器）；抛出的错误一律可读 */
-export const crawlRankSource = async (source: RankSeedSource): Promise<CrawledRank> => {
+export const crawlRankSource = async (source: RankSeedSource, signal?: AbortSignal): Promise<CrawledRank> => {
+  throwIfAborted(signal)
   const maxPages = Number(source.meta?.maxPages || 1)
   if (source.siteCode === 'fanqie') {
-    const parsed = await fetchFanqieRank(source.url, maxPages)
+    const parsed = await fetchFanqieRank(source.url, maxPages, signal)
     // 番茄条目不带分类：从源配置补（每个分类一个榜单源）
     const category = findRankCategory(source.categoryLegacyId)
     const items = category
@@ -349,10 +359,10 @@ export const crawlRankSource = async (source: RankSeedSource): Promise<CrawledRa
     return { items, pageTitle: parsed.pageTitle, cutoffText: parsed.cutoffText }
   }
   if (source.siteCode === 'qimao') {
-    return { items: await fetchQimaoRank(source.url, maxPages) }
+    return { items: await fetchQimaoRank(source.url, maxPages, signal) }
   }
   if (source.siteCode === 'qidian') {
-    return { items: await fetchQidianRank(source.url, maxPages) }
+    return { items: await fetchQidianRank(source.url, maxPages, signal) }
   }
   throw new Error(`站点 ${source.siteCode} 的抓取适配器尚未接入`)
 }

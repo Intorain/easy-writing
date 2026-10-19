@@ -299,6 +299,7 @@ const normalizeRichText = (html: unknown) => {
 }
 
 const syncedDetailById = new Map<number, string>()
+const settingBaselines = new Map<number, Partial<WorldSetting>>()
 
 const normalizeId = (id: string | number) => String(id)
 
@@ -342,6 +343,8 @@ const getSettingTypeLabel = (value?: number | null) => {
 }
 
 const buildSettingTree = (data: WorldSettingTreeFolder[]) => {
+  settingBaselines.clear()
+  for (const folder of data) for (const item of folder.children || []) settingBaselines.set(item.id, JSON.parse(JSON.stringify(item)))
   syncedDetailById.clear()
   const folders: SettingFolder[] = data.map(folder => ({
     id: normalizeId(folder.id),
@@ -739,13 +742,15 @@ const handleMenuAction = async (action: string) => {
 const saveCurrentSetting = async (silent = false) => {
   if (!currentSetting.value) return false
   try {
-    await updateWorldSettingApi({
+    const payload = {
       id: currentSetting.value.id,
       name: currentSetting.value.name,
       detail: currentSetting.value.detail,
       type: currentSetting.value.type,
       groupId: currentSetting.value.groupId
-    })
+    }
+    await updateWorldSettingApi(payload, settingBaselines.get(payload.id))
+    settingBaselines.set(payload.id, { ...settingBaselines.get(payload.id), ...payload })
     syncedDetailById.set(currentSetting.value.id, normalizeRichText(currentSetting.value.detail))
     emit('lore-updated')
     if (!silent) {
@@ -800,11 +805,13 @@ const scheduleDetailSave = () => {
   }
   detailSaveTimer.value = window.setTimeout(async () => {
     try {
-      await updateWorldSettingApi(payload)
+      await updateWorldSettingApi(payload, settingBaselines.get(payload.id))
+      settingBaselines.set(payload.id, { ...settingBaselines.get(payload.id), ...payload })
       syncedDetailById.set(payload.id, normalizeRichText(payload.detail))
       emit('lore-updated')
     } catch (error) {
       console.error('保存设定失败:', error)
+      ElMessage.error(error instanceof Error ? error.message : '保存失败，当前编辑内容已保留')
     }
     detailSaveTimer.value = null
   }, 600)

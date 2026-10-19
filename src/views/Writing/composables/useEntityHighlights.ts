@@ -121,7 +121,7 @@ export const useEntityHighlights = (options: EntityHighlightsOptions) => {
     editorStore.dismissEntityHighlight(entityHighlightBookKey.value, group.key)
     applyEntityHighlights()
     hideEntityHover()
-    ElMessage.success('已取消本次关联显示')
+    ElMessage.success('已取消当前作品中的该名称高亮，可在编辑器“偏好”中恢复')
   }
 
   const getEntityTarget = (event: MouseEvent) => {

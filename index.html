@@ -6,9 +6,224 @@
   <link rel="icon" type="image/png" href="/logo.png" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>易创</title>
+  <style>
+    /* 启动占位：在任何脚本加载前先画出来，应用挂载后由 bootstrap 淡出移除。
+       两笔渐细的墨痕对转：起笔重、收笔轻，浓淡是笔画分段、每段不透明地向底色靠（纯矢量，不用滤镜、遮罩和半透明叠加，桌面端 WebKit 不会糊也没有接缝）；
+       底是作者当前主题色上的一层薄罩。 */
+    #ew-boot {
+      --boot-bg: #F2F0EA;
+      --boot-veil: rgba(36, 31, 27, 0.055);
+      --boot-ink: #241F1B;
+      --boot-cinnabar: #7A3028;
+      --boot-text: #655E56;
+      position: fixed;
+      inset: 0;
+      z-index: 2147483000;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 28px;
+      background: var(--boot-veil);
+      -webkit-backdrop-filter: blur(14px) saturate(1.05);
+              backdrop-filter: blur(14px) saturate(1.05);
+      color: var(--boot-text);
+      font-family: "Noto Serif SC", "Songti SC", SimSun, serif;
+      font-size: 13px;
+      letter-spacing: 0.12em;
+      transition: opacity 320ms ease;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    #ew-boot[data-theme="yellow"] { --boot-bg: #E9DFCC; --boot-veil: rgba(52, 39, 31, 0.06); --boot-ink: #34271F; --boot-cinnabar: #8B4A2F; --boot-text: #6B5849; }
+    #ew-boot[data-theme="green"]  { --boot-bg: #E5E6DB; --boot-veil: rgba(38, 48, 40, 0.06); --boot-ink: #263028; --boot-cinnabar: #52634F; --boot-text: #59645A; }
+    #ew-boot[data-theme="dark"]   { --boot-bg: #171714; --boot-veil: rgba(0, 0, 0, 0.28); --boot-ink: #ECE7DC; --boot-cinnabar: #9F472F; --boot-text: #8F887E; }
+    #ew-boot.is-done { opacity: 0; pointer-events: none; }
+
+    #ew-boot .boot-ink { position: relative; width: 128px; height: 128px; }
+    #ew-boot .boot-stroke {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      overflow: visible;
+      transform-origin: 50% 50%;
+      animation: ew-boot-spin 2.6s linear infinite;
+      shape-rendering: geometricPrecision;
+    }
+    #ew-boot .boot-stroke-inner { animation: ew-boot-spin-back 1.8s linear infinite; }
+    @keyframes ew-boot-spin { to { transform: rotate(360deg); } }
+    @keyframes ew-boot-spin-back { to { transform: rotate(-360deg); } }
+    @media (prefers-reduced-motion: reduce) {
+      #ew-boot .boot-stroke { animation: ew-boot-breathe 2s ease-in-out infinite; }
+      @keyframes ew-boot-breathe { 50% { opacity: 0.45; } }
+    }
+  </style>
 </head>
 
 <body>
+  <div id="ew-boot" role="status" aria-live="polite" aria-label="正在准备工作台">
+    <div class="boot-ink" aria-hidden="true">
+      <svg class="boot-stroke" viewBox="0 0 100 100">
+          <path d="M15.34,33.22 L16.66,30.75 L17.52,31.25 L16.25,33.66 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 6.3%, var(--boot-bg))" />
+          <path d="M14.20,35.78 L15.74,32.48 L16.63,32.94 L15.17,36.16 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 6.7%, var(--boot-bg))" />
+          <path d="M13.25,38.41 L14.54,35.01 L15.49,35.41 L14.27,38.73 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 7.3%, var(--boot-bg))" />
+          <path d="M12.48,41.11 L13.53,37.62 L14.54,37.96 L13.57,41.37 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 7.9%, var(--boot-bg))" />
+          <path d="M11.91,43.85 L12.71,40.30 L13.78,40.58 L13.06,44.04 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 8.6%, var(--boot-bg))" />
+          <path d="M11.54,46.63 L12.08,43.03 L13.21,43.24 L12.75,46.74 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 9.3%, var(--boot-bg))" />
+          <path d="M11.36,49.44 L11.65,45.80 L12.85,45.93 L12.65,49.46 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 10.0%, var(--boot-bg))" />
+          <path d="M11.39,52.25 L11.41,48.60 L12.68,48.64 L12.74,52.17 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 10.8%, var(--boot-bg))" />
+          <path d="M11.62,55.05 L11.38,51.41 L12.71,51.36 L13.03,54.87 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 11.7%, var(--boot-bg))" />
+          <path d="M12.05,57.84 L11.55,54.21 L12.94,54.06 L13.52,57.53 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 12.5%, var(--boot-bg))" />
+          <path d="M12.68,60.58 L11.92,57.00 L13.37,56.73 L14.20,60.15 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 13.4%, var(--boot-bg))" />
+          <path d="M13.51,63.28 L12.49,59.76 L14.00,59.37 L15.08,62.71 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 14.4%, var(--boot-bg))" />
+          <path d="M14.53,65.92 L13.26,62.47 L14.81,61.94 L16.13,65.20 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 15.3%, var(--boot-bg))" />
+          <path d="M15.73,68.48 L14.22,65.13 L15.82,64.45 L17.37,67.59 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 16.3%, var(--boot-bg))" />
+          <path d="M17.12,70.94 L15.37,67.71 L17.00,66.87 L18.78,69.89 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 17.3%, var(--boot-bg))" />
+          <path d="M18.69,73.31 L16.71,70.20 L18.36,69.20 L20.35,72.08 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 18.3%, var(--boot-bg))" />
+          <path d="M20.43,75.56 L18.22,72.60 L19.88,71.42 L22.07,74.14 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 19.4%, var(--boot-bg))" />
+          <path d="M22.32,77.68 L19.91,74.88 L21.55,73.52 L23.94,76.06 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 20.5%, var(--boot-bg))" />
+          <path d="M24.37,79.66 L21.75,77.04 L23.38,75.48 L25.94,77.84 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 21.6%, var(--boot-bg))" />
+          <path d="M26.56,81.49 L23.75,79.06 L25.34,77.31 L28.06,79.47 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 22.7%, var(--boot-bg))" />
+          <path d="M28.87,83.16 L25.90,80.94 L27.42,78.98 L30.29,80.93 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 23.8%, var(--boot-bg))" />
+          <path d="M31.31,84.67 L28.18,82.66 L29.62,80.49 L32.62,82.23 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 25.0%, var(--boot-bg))" />
+          <path d="M33.85,85.99 L30.58,84.22 L31.92,81.84 L35.04,83.35 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 26.1%, var(--boot-bg))" />
+          <path d="M36.48,87.13 L33.09,85.60 L34.31,83.01 L37.52,84.28 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 27.3%, var(--boot-bg))" />
+          <path d="M39.20,88.08 L35.69,86.79 L36.78,84.00 L40.06,85.03 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 28.5%, var(--boot-bg))" />
+          <path d="M41.98,88.84 L38.38,87.80 L39.30,84.81 L42.65,85.59 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 29.8%, var(--boot-bg))" />
+          <path d="M44.81,89.39 L41.15,88.61 L41.87,85.42 L45.27,85.96 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 31.0%, var(--boot-bg))" />
+          <path d="M47.69,89.73 L43.96,89.22 L44.48,85.85 L47.90,86.14 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 32.3%, var(--boot-bg))" />
+          <path d="M50.58,89.87 L46.82,89.63 L47.11,86.08 L50.53,86.12 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 33.5%, var(--boot-bg))" />
+          <path d="M53.48,89.80 L49.71,89.83 L49.74,86.12 L53.14,85.91 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 34.8%, var(--boot-bg))" />
+          <path d="M56.38,89.52 L52.61,89.82 L52.36,85.97 L55.73,85.51 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 36.1%, var(--boot-bg))" />
+          <path d="M59.25,89.03 L55.51,89.61 L54.95,85.63 L58.28,84.92 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 37.5%, var(--boot-bg))" />
+          <path d="M62.09,88.33 L58.39,89.18 L57.51,85.10 L60.77,84.15 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 38.8%, var(--boot-bg))" />
+          <path d="M64.87,87.43 L61.24,88.54 L60.02,84.38 L63.19,83.20 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 40.1%, var(--boot-bg))" />
+          <path d="M67.59,86.33 L64.04,87.70 L62.46,83.48 L65.53,82.08 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 41.5%, var(--boot-bg))" />
+          <path d="M70.22,85.03 L66.77,86.66 L64.83,82.41 L67.78,80.79 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 42.9%, var(--boot-bg))" />
+          <path d="M72.76,83.54 L69.43,85.42 L67.10,81.18 L69.92,79.35 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 44.3%, var(--boot-bg))" />
+          <path d="M75.20,81.86 L72.00,83.98 L69.28,79.78 L71.94,77.75 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 45.7%, var(--boot-bg))" />
+          <path d="M77.50,80.02 L74.47,82.37 L71.34,78.23 L73.84,76.02 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 47.1%, var(--boot-bg))" />
+          <path d="M79.68,78.00 L76.81,80.57 L73.27,76.54 L75.60,74.15 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 48.5%, var(--boot-bg))" />
+          <path d="M81.71,75.83 L79.03,78.61 L75.07,74.71 L77.22,72.17 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 50.0%, var(--boot-bg))" />
+          <path d="M83.58,73.51 L81.10,76.48 L76.73,72.77 L78.68,70.08 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 51.4%, var(--boot-bg))" />
+          <path d="M85.28,71.06 L83.02,74.21 L78.24,70.71 L79.98,67.89 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 52.9%, var(--boot-bg))" />
+          <path d="M86.80,68.48 L84.77,71.79 L79.59,68.55 L81.11,65.63 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 54.3%, var(--boot-bg))" />
+          <path d="M88.14,65.80 L86.35,69.26 L80.77,66.31 L82.08,63.29 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 55.8%, var(--boot-bg))" />
+          <path d="M89.28,63.02 L87.74,66.60 L81.79,63.99 L82.86,60.89 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 57.3%, var(--boot-bg))" />
+          <path d="M90.22,60.15 L88.94,63.85 L82.63,61.61 L83.47,58.45 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 58.9%, var(--boot-bg))" />
+          <path d="M90.95,57.22 L89.94,61.01 L83.29,59.18 L83.89,55.98 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 60.4%, var(--boot-bg))" />
+          <path d="M91.47,54.24 L90.73,58.10 L83.77,56.72 L84.13,53.49 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 61.9%, var(--boot-bg))" />
+          <path d="M91.77,51.22 L91.32,55.13 L84.06,54.23 L84.19,50.99 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 63.5%, var(--boot-bg))" />
+          <path d="M91.86,48.17 L91.68,52.12 L84.18,51.74 L84.07,48.51 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 65.0%, var(--boot-bg))" />
+          <path d="M91.72,45.12 L91.83,49.09 L84.11,49.26 L83.76,46.05 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 66.6%, var(--boot-bg))" />
+          <path d="M91.36,42.08 L91.76,46.04 L83.86,46.79 L83.28,43.63 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 68.2%, var(--boot-bg))" />
+          <path d="M90.78,39.07 L91.47,43.00 L83.43,44.36 L82.63,41.26 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 69.7%, var(--boot-bg))" />
+          <path d="M89.99,36.10 L90.96,39.98 L82.82,41.97 L81.80,38.95 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 71.3%, var(--boot-bg))" />
+          <path d="M88.98,33.19 L90.23,36.99 L82.05,39.64 L80.81,36.71 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 73.0%, var(--boot-bg))" />
+          <path d="M87.75,30.35 L89.28,34.06 L81.11,37.38 L79.66,34.56 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 74.6%, var(--boot-bg))" />
+          <path d="M86.32,27.60 L88.12,31.20 L80.01,35.20 L78.36,32.50 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 76.2%, var(--boot-bg))" />
+          <path d="M84.69,24.95 L86.75,28.42 L78.75,33.12 L76.92,30.56 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 77.8%, var(--boot-bg))" />
+          <path d="M82.87,22.42 L85.18,25.74 L77.36,31.14 L75.35,28.73 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 79.5%, var(--boot-bg))" />
+          <path d="M80.86,20.02 L83.42,23.18 L75.82,29.28 L73.65,27.02 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 81.1%, var(--boot-bg))" />
+          <path d="M78.68,17.77 L81.46,20.74 L74.16,27.54 L71.84,25.46 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 82.8%, var(--boot-bg))" />
+          <path d="M76.34,15.68 L79.34,18.45 L72.39,25.93 L69.93,24.03 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 84.5%, var(--boot-bg))" />
+          <path d="M73.84,13.75 L77.04,16.30 L70.50,24.46 L67.92,22.75 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 86.2%, var(--boot-bg))" />
+          <path d="M71.20,12.01 L74.59,14.33 L68.52,23.14 L65.83,21.63 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 87.9%, var(--boot-bg))" />
+          <path d="M68.44,10.45 L72.00,12.53 L66.46,21.97 L63.68,20.67 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 89.6%, var(--boot-bg))" />
+          <path d="M65.56,9.10 L69.27,10.92 L64.33,20.95 L61.47,19.87 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 91.3%, var(--boot-bg))" />
+          <path d="M62.59,7.96 L66.43,9.51 L62.13,20.11 L59.21,19.23 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 93.0%, var(--boot-bg))" />
+          <path d="M59.53,7.03 L63.48,8.30 L59.89,19.42 L56.92,18.77 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 94.8%, var(--boot-bg))" />
+          <path d="M56.40,6.33 L60.44,7.31 L57.61,18.91 L54.62,18.48 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 96.5%, var(--boot-bg))" />
+          <path d="M53.22,5.85 L57.34,6.54 L55.31,18.56 L52.31,18.35 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 98.2%, var(--boot-bg))" />
+          <path d="M50.00,18.40 A6.40,6.40 0 0 1 50.00,5.60 L54.17,5.99 L53.00,18.39 Z" style="fill:var(--boot-ink);fill:color-mix(in srgb, var(--boot-ink) 100.0%, var(--boot-bg))" />
+      </svg>
+      <svg class="boot-stroke boot-stroke-inner" viewBox="0 0 100 100">
+          <path d="M71.47,40.68 L71.99,42.00 L71.24,42.27 L70.73,41.00 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 6.3%, var(--boot-bg))" />
+          <path d="M70.87,39.39 L71.62,41.07 L70.88,41.38 L70.13,39.77 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 6.7%, var(--boot-bg))" />
+          <path d="M70.20,38.14 L71.05,39.78 L70.31,40.14 L69.47,38.57 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 7.3%, var(--boot-bg))" />
+          <path d="M69.46,36.93 L70.40,38.51 L69.67,38.93 L68.72,37.42 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 7.9%, var(--boot-bg))" />
+          <path d="M68.65,35.76 L69.68,37.29 L68.95,37.77 L67.91,36.32 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 8.6%, var(--boot-bg))" />
+          <path d="M67.77,34.65 L68.89,36.11 L68.16,36.65 L67.04,35.28 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 9.3%, var(--boot-bg))" />
+          <path d="M66.82,33.58 L68.03,34.98 L67.30,35.59 L66.10,34.29 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 10.0%, var(--boot-bg))" />
+          <path d="M65.81,32.57 L67.11,33.90 L66.38,34.58 L65.10,33.36 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 10.8%, var(--boot-bg))" />
+          <path d="M64.75,31.63 L66.12,32.88 L65.40,33.64 L64.05,32.50 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 11.7%, var(--boot-bg))" />
+          <path d="M63.62,30.74 L65.07,31.91 L64.36,32.76 L62.94,31.70 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 12.5%, var(--boot-bg))" />
+          <path d="M62.45,29.93 L63.96,31.01 L63.28,31.94 L61.80,30.98 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 13.4%, var(--boot-bg))" />
+          <path d="M61.22,29.18 L62.80,30.17 L62.14,31.20 L60.61,30.33 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 14.4%, var(--boot-bg))" />
+          <path d="M59.96,28.51 L61.59,29.41 L60.96,30.52 L59.38,29.75 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 15.3%, var(--boot-bg))" />
+          <path d="M58.65,27.91 L60.34,28.71 L59.75,29.93 L58.13,29.25 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 16.3%, var(--boot-bg))" />
+          <path d="M57.31,27.39 L59.04,28.09 L58.50,29.40 L56.84,28.84 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 17.3%, var(--boot-bg))" />
+          <path d="M55.94,26.96 L57.71,27.55 L57.23,28.96 L55.54,28.50 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 18.3%, var(--boot-bg))" />
+          <path d="M54.54,26.60 L56.35,27.09 L55.93,28.60 L54.22,28.24 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 19.4%, var(--boot-bg))" />
+          <path d="M53.12,26.33 L54.96,26.71 L54.61,28.32 L52.89,28.07 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 20.5%, var(--boot-bg))" />
+          <path d="M51.68,26.14 L53.54,26.41 L53.29,28.12 L51.55,27.98 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 21.6%, var(--boot-bg))" />
+          <path d="M50.23,26.03 L52.11,26.19 L51.95,28.00 L50.21,27.97 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 22.7%, var(--boot-bg))" />
+          <path d="M48.78,26.02 L50.67,26.07 L50.61,27.97 L48.88,28.04 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 23.8%, var(--boot-bg))" />
+          <path d="M47.32,26.09 L49.21,26.02 L49.28,28.02 L47.56,28.20 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 25.0%, var(--boot-bg))" />
+          <path d="M45.87,26.25 L47.76,26.07 L47.96,28.15 L46.25,28.43 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 26.1%, var(--boot-bg))" />
+          <path d="M44.43,26.49 L46.31,26.20 L46.64,28.36 L44.96,28.75 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 27.3%, var(--boot-bg))" />
+          <path d="M43.00,26.82 L44.86,26.42 L45.35,28.65 L43.70,29.14 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 28.5%, var(--boot-bg))" />
+          <path d="M41.59,27.24 L43.43,26.72 L44.08,29.02 L42.47,29.61 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 29.8%, var(--boot-bg))" />
+          <path d="M40.21,27.74 L42.01,27.12 L42.84,29.47 L41.27,30.15 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 31.0%, var(--boot-bg))" />
+          <path d="M38.85,28.33 L40.62,27.59 L41.63,29.99 L40.11,30.77 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 32.3%, var(--boot-bg))" />
+          <path d="M37.53,29.00 L39.26,28.15 L40.45,30.58 L38.99,31.45 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 33.5%, var(--boot-bg))" />
+          <path d="M36.25,29.74 L37.93,28.80 L39.32,31.24 L37.92,32.20 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 34.8%, var(--boot-bg))" />
+          <path d="M35.01,30.57 L36.63,29.52 L38.24,31.97 L36.90,33.01 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 36.1%, var(--boot-bg))" />
+          <path d="M33.82,31.46 L35.38,30.32 L37.20,32.77 L35.93,33.88 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 37.5%, var(--boot-bg))" />
+          <path d="M32.69,32.43 L34.18,31.19 L36.22,33.62 L35.02,34.80 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 38.8%, var(--boot-bg))" />
+          <path d="M31.61,33.47 L33.03,32.14 L35.29,34.53 L34.18,35.78 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 40.1%, var(--boot-bg))" />
+          <path d="M30.59,34.58 L31.93,33.16 L34.43,35.49 L33.39,36.80 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 41.5%, var(--boot-bg))" />
+          <path d="M29.64,35.75 L30.90,34.25 L33.63,36.50 L32.68,37.87 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 42.9%, var(--boot-bg))" />
+          <path d="M28.76,36.97 L29.93,35.40 L32.89,37.55 L32.03,38.98 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 44.3%, var(--boot-bg))" />
+          <path d="M27.95,38.25 L29.03,36.60 L32.22,38.64 L31.45,40.11 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 45.7%, var(--boot-bg))" />
+          <path d="M27.22,39.58 L28.20,37.87 L31.63,39.77 L30.95,41.28 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 47.1%, var(--boot-bg))" />
+          <path d="M26.57,40.95 L27.44,39.18 L31.10,40.93 L30.52,42.48 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 48.5%, var(--boot-bg))" />
+          <path d="M26.00,42.37 L26.76,40.54 L30.65,42.12 L30.17,43.69 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 50.0%, var(--boot-bg))" />
+          <path d="M25.51,43.82 L26.17,41.94 L30.27,43.33 L29.89,44.92 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 51.4%, var(--boot-bg))" />
+          <path d="M25.11,45.30 L25.66,43.38 L29.97,44.55 L29.69,46.16 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 52.9%, var(--boot-bg))" />
+          <path d="M24.80,46.81 L25.23,44.86 L29.75,45.79 L29.56,47.41 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 54.3%, var(--boot-bg))" />
+          <path d="M24.58,48.33 L24.89,46.35 L29.60,47.04 L29.52,48.66 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 55.8%, var(--boot-bg))" />
+          <path d="M24.45,49.88 L24.65,47.88 L29.53,48.28 L29.55,49.90 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 57.3%, var(--boot-bg))" />
+          <path d="M24.42,51.43 L24.49,49.41 L29.54,49.53 L29.66,51.14 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 58.9%, var(--boot-bg))" />
+          <path d="M24.47,52.98 L24.43,50.96 L29.62,50.77 L29.84,52.36 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 60.4%, var(--boot-bg))" />
+          <path d="M24.63,54.54 L24.46,52.52 L29.78,51.99 L30.09,53.56 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 61.9%, var(--boot-bg))" />
+          <path d="M24.87,56.08 L24.58,54.07 L30.02,53.20 L30.42,54.74 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 63.5%, var(--boot-bg))" />
+          <path d="M25.21,57.62 L24.80,55.62 L30.32,54.39 L30.82,55.89 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 65.0%, var(--boot-bg))" />
+          <path d="M25.64,59.13 L25.11,57.16 L30.70,55.55 L31.29,57.02 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 66.6%, var(--boot-bg))" />
+          <path d="M26.17,60.63 L25.51,58.68 L31.15,56.68 L31.82,58.10 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 68.2%, var(--boot-bg))" />
+          <path d="M26.78,62.09 L26.01,60.18 L31.66,57.78 L32.42,59.15 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 69.7%, var(--boot-bg))" />
+          <path d="M27.48,63.51 L26.60,61.65 L32.24,58.84 L33.07,60.16 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 71.3%, var(--boot-bg))" />
+          <path d="M28.28,64.90 L27.27,63.09 L32.88,59.86 L33.79,61.12 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 73.0%, var(--boot-bg))" />
+          <path d="M29.15,66.24 L28.04,64.48 L33.57,60.83 L34.56,62.03 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 74.6%, var(--boot-bg))" />
+          <path d="M30.11,67.53 L28.89,65.84 L34.33,61.75 L35.38,62.88 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 76.2%, var(--boot-bg))" />
+          <path d="M31.15,68.76 L29.82,67.14 L35.13,62.63 L36.25,63.68 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 77.8%, var(--boot-bg))" />
+          <path d="M32.26,69.94 L30.83,68.39 L35.99,63.44 L37.16,64.43 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 79.5%, var(--boot-bg))" />
+          <path d="M33.44,71.04 L31.92,69.58 L36.89,64.20 L38.11,65.11 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 81.1%, var(--boot-bg))" />
+          <path d="M34.70,72.08 L33.09,70.71 L37.83,64.90 L39.10,65.73 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 82.8%, var(--boot-bg))" />
+          <path d="M36.02,73.04 L34.32,71.77 L38.80,65.54 L40.12,66.28 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 84.5%, var(--boot-bg))" />
+          <path d="M37.40,73.93 L35.62,72.75 L39.81,66.12 L41.17,66.77 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 86.2%, var(--boot-bg))" />
+          <path d="M38.83,74.73 L36.98,73.66 L40.85,66.62 L42.24,67.19 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 87.9%, var(--boot-bg))" />
+          <path d="M40.32,75.45 L38.40,74.49 L41.91,67.07 L43.32,67.54 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 89.6%, var(--boot-bg))" />
+          <path d="M41.85,76.08 L39.87,75.23 L43.00,67.44 L44.43,67.83 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 91.3%, var(--boot-bg))" />
+          <path d="M43.42,76.61 L41.39,75.89 L44.10,67.74 L45.54,68.04 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 93.0%, var(--boot-bg))" />
+          <path d="M45.03,77.06 L42.95,76.45 L45.21,67.98 L46.66,68.18 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 94.8%, var(--boot-bg))" />
+          <path d="M46.66,77.40 L44.54,76.92 L46.32,68.14 L47.78,68.26 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 96.5%, var(--boot-bg))" />
+          <path d="M48.32,77.65 L46.17,77.30 L47.44,68.24 L48.89,68.26 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 98.2%, var(--boot-bg))" />
+          <path d="M50.00,68.20 A4.80,4.80 0 0 1 50.00,77.80 L47.82,77.58 L48.56,68.26 Z" style="fill:var(--boot-cinnabar);fill:color-mix(in srgb, var(--boot-cinnabar) 100.0%, var(--boot-bg))" />
+      </svg>
+    </div>
+    <span>正在准备工作台</span>
+  </div>
+  <script>
+    // 主题在设置库里，脚本加载前读不到；主题切换时留的记号只用来给启动页定底色
+    try {
+      var bootTheme = localStorage.getItem('ew-boot-theme')
+      var boot = document.getElementById('ew-boot')
+      if (bootTheme === 'dark' || bootTheme === 'yellow' || bootTheme === 'green') boot.setAttribute('data-theme', bootTheme)
+      document.body.style.background = getComputedStyle(boot).getPropertyValue('--boot-bg').trim()
+    } catch (e) { /* 无痕模式等拿不到记号时用默认主题 */ }
+  </script>
   <div id="app"></div>
   <script type="module" src="/src/main.ts"></script>
 </body>

@@ -809,3 +809,30 @@
 }
 
 /* --- 自爆模式样式已移至 index.vue --- */
+
+/* ============================================================
+   专注模式与打字机模式（开关在偏好设置里，类由 WritingEditor 绑定）
+   ============================================================ */
+
+/* 专注模式：只亮光标所在的段（FocusLineExtension 加 .focus-current），其余段与章节标题变淡 */
+.editor-area-wrapper.focus-mode {
+  .chapter-title-input {
+    opacity: 0.35;
+    transition: opacity 0.18s ease;
+  }
+
+  .ProseMirror > * {
+    opacity: 0.35;
+    transition: opacity 0.18s ease;
+  }
+
+  .ProseMirror > .focus-current {
+    opacity: 1;
+    box-shadow: inset 3px 0 0 var(--ink-accent, currentColor);
+  }
+}
+
+/* 打字机模式：正文底部补基准线以下那一截空白，最后一行也能停在基准线上 */
+.editor-content.typewriter-mode .editor-area-wrapper {
+  padding-bottom: var(--typewriter-gap, 0px);
+}

@@ -120,20 +120,17 @@ const normalizeModelProvider = (provider?: string, code?: string) => {
 
 // 三组默认模型：用户组偏好 → 记录的选中值 → 平台策略默认
 const getGroupDefaultModel = (groupCode: 'text_assist' | 'workflow_book' | 'image_generation') => {
-  const selectedCode = groupCode === 'text_assist'
-    ? aiModelStore.textModel
-    : groupCode === 'workflow_book'
-      ? aiModelStore.workflowModel
-      : aiModelStore.imageModel
+  // 实际生效的模型：没选时写作助手/生图自动用第一个启用的，工作流没选就是空
+  const selectedCode = aiModelStore.effectiveModelCode(groupCode)
   const group = aiModelStore.groups[groupCode]
   return (group?.models || []).find(item => item.code === selectedCode)
     || group?.selectedModel
     || group?.defaultModel
     || null
 }
-const defaultTextModelLabel = computed(() => getGroupDefaultModel('text_assist')?.name || '智能推荐')
-const defaultWorkflowModelLabel = computed(() => getGroupDefaultModel('workflow_book')?.name || '智能推荐')
-const defaultImageModelLabel = computed(() => getGroupDefaultModel('image_generation')?.name || '智能推荐')
+const defaultTextModelLabel = computed(() => getGroupDefaultModel('text_assist')?.name || '未设置')
+const defaultWorkflowModelLabel = computed(() => getGroupDefaultModel('workflow_book')?.name || '未设置')
+const defaultImageModelLabel = computed(() => getGroupDefaultModel('image_generation')?.name || '未设置')
 const defaultModelIcon = computed(() => {
   const model = getGroupDefaultModel('text_assist')
   if (!model) return ''
@@ -152,6 +149,7 @@ const shortcuts: Array<{ id: SettingsSectionId; icon: string; title: string; des
   { id: 'writing', icon: 'fa-regular fa-pen-to-square', title: '写作体验', description: '配置打字反馈、自爆挑战与写作辅助' },
   { id: 'appearance', icon: 'fa-solid fa-palette', title: '外观主题', description: '切换主题风格、字体与排版效果' },
   { id: 'record', icon: 'fa-regular fa-clipboard', title: 'AI 调用记录', description: '查看模型调用、工作流生成与会话记录' },
+  { id: 'weixin', icon: 'fa-brands fa-weixin', title: '微信助手', description: '绑定微信 ClawBot，在微信里查榜单与灵感' },
   { id: 'cache', icon: 'fa-solid fa-database', title: '存储空间', description: '查看本地缓存占用并清理临时数据' },
 ]
 

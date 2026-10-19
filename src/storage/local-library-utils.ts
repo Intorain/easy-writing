@@ -1,3 +1,5 @@
+import { readLocalTxtContent } from './text-file'
+export { readLocalTxtContent } from './text-file'
 import { getWritingStorage } from '@/storage'
 import type {
   LocalBook,
@@ -116,6 +118,39 @@ export const normalizeLocalChapter = (payload: Omit<Partial<LocalChapter>, 'book
 
 export const sortBySortNo = <T extends { sortNo?: number; createTime?: string; id?: number }>(list: T[]) =>
   [...list].sort((a, b) => Number(a.sortNo || 0) - Number(b.sortNo || 0) || String(a.createTime || '').localeCompare(String(b.createTime || '')) || Number(a.id || 0) - Number(b.id || 0))
+
+/** 新建章 / 卷时的序号：同级现有序号的最大值加一（没有或都没编号时为 1），接在末尾 */
+export const nextSortNo = (siblings: Array<{ sortNo?: number }>) =>
+  siblings.reduce((max, item) => Math.max(max, Number(item.sortNo || 0)), 0) + 1
+
+const createTimeOf = (item: { createTime?: string }) => {
+  const time = Date.parse(String(item.createTime || ''))
+  return Number.isFinite(time) ? time : 0
+}
+/** 创建先后：先看创建时间；同一毫秒内的本地 id 是递减的负数，绝对值小的先建 */
+const byCreation = (a: { id?: number; createTime?: string }, b: { id?: number; createTime?: string }) =>
+  createTimeOf(a) - createTimeOf(b) || Math.abs(Number(a.id || 0)) - Math.abs(Number(b.id || 0))
+
+/**
+ * 目录顺序修复：一卷里混着没编号（序号 0）的章，或序号重复，给出应有的章 id 顺序；不需要修就返回 null。
+ * 编过号的章保持原有先后；没编号的按创建时间逐个插到"在它之前创建的最后一章"后面，比谁都早就排最前。
+ * 这样"导入后新建的章"落到卷末，"先建了几章再导入"的也不会被导入的章顶到前面。
+ */
+export const repairChapterOrder = <T extends { id: number; sortNo?: number; createTime?: string }>(chapters: T[]): number[] | null => {
+  const numbered = sortBySortNo(chapters.filter(chapter => Number(chapter.sortNo || 0) > 0))
+  const unnumbered = chapters.filter(chapter => Number(chapter.sortNo || 0) <= 0).sort(byCreation)
+  const duplicated = new Set(numbered.map(chapter => Number(chapter.sortNo))).size !== numbered.length
+  if (!unnumbered.length && !duplicated) return null
+  const order: T[] = [...numbered]
+  for (const chapter of unnumbered) {
+    let at = -1
+    order.forEach((item, index) => {
+      if (byCreation(item, chapter) <= 0) at = index
+    })
+    order.splice(at + 1, 0, chapter)
+  }
+  return order.map(chapter => chapter.id)
+}
 
 export const buildLocalTree = (volumes: LocalVolume[], chapters: LocalChapter[]): LocalLibraryVolume[] => {
   const activeVolumes = sortBySortNo(volumes.filter(volume => !volume.deletedAt))
@@ -243,90 +278,6 @@ const acceptTxtHeading = (match: RegExpMatchArray, lastNo: number): { pass: bool
   return { pass: true, no }
 }
 
-/** 可读字符占比：汉字、ASCII 可见字符、常见中英标点、换行制表算可读，用来给解码候选打分 */
-const readableRatio = (text: string): number => {
-  const sample = Array.from(text.slice(0, 8000))
-  if (!sample.length) return 0
-  let ok = 0
-  for (const ch of sample) {
-    const code = ch.codePointAt(0) ?? 0
-    if (
-      code === 0x09 || code === 0x0a || code === 0x0d
-      || (code >= 0x20 && code <= 0x7e)
-      || (code >= 0x2000 && code <= 0x206f)
-      || (code >= 0x3000 && code <= 0x303f)
-      || (code >= 0x4e00 && code <= 0x9fff)
-      || (code >= 0xff00 && code <= 0xffef)
-    ) ok++
-  }
-  return ok / sample.length
-}
-
-/** 去掉零字节和其它不可见控制字符（保留换行、回车、制表），这类字符常见于站点下载或软件导出的 TXT 尾部填充 */
-// eslint-disable-next-line no-control-regex
-const stripControlChars = (text: string): string => text.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '')
-
-/** 无 BOM 的 UTF-16 兜底：两种字节序各试一次，挑出没有零字符且可读占比最高的那个 */
-const decodeBomlessUtf16 = (bytes: Uint8Array): string | null => {
-  let best: { text: string; score: number } | null = null
-  for (const encoding of ['utf-16le', 'utf-16be'] as const) {
-    let text: string
-    try {
-      text = new TextDecoder(encoding, { fatal: true }).decode(bytes)
-    } catch {
-      continue
-    }
-    if (text.includes('\0')) continue
-    const score = readableRatio(text)
-    if (!best || score > best.score) best = { text, score }
-  }
-  return best && best.score >= 0.9 ? best.text : null
-}
-
-const tryDecode = (bytes: Uint8Array, encoding: string): string | null => {
-  try {
-    return new TextDecoder(encoding, { fatal: true }).decode(bytes)
-  } catch {
-    return null
-  }
-}
-
-/**
- * 优先按 BOM 解码；无 BOM 时先验证 UTF-8，再兼容 GBK/GB18030 中文文本，
- * 两者都不行或解出零字符时再按无 BOM 的 UTF-16 试一次。
- */
-const readLocalTxtContent = async (file: File): Promise<string> => {
-  const bytes = new Uint8Array(await file.arrayBuffer())
-  let bomEncoding: string | null = null
-  if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) bomEncoding = 'utf-8'
-  else if (bytes[0] === 0xff && bytes[1] === 0xfe) bomEncoding = 'utf-16le'
-  else if (bytes[0] === 0xfe && bytes[1] === 0xff) bomEncoding = 'utf-16be'
-
-  let text: string | null
-  if (bomEncoding) {
-    text = tryDecode(bytes, bomEncoding)
-  } else {
-    text = tryDecode(bytes, 'utf-8') ?? tryDecode(bytes, 'gb18030')
-    // 没有 BOM 的 UTF-16 文件：GB18030 要么直接解码失败，要么解成带零字符的乱码
-    if (text == null || text.includes('\0')) {
-      const utf16 = decodeBomlessUtf16(bytes)
-      if (utf16) return utf16
-    }
-  }
-  if (text == null) {
-    throw new Error('无法正确读取 TXT 编码，请将原文件另存为 UTF-8 后重新导入')
-  }
-
-  // 正常文本里夹了零字节（下载站填充、软件导出残留）直接剔掉即可，不必让用户去转码；
-  // 剔掉的比例过半或剩下的不像文字，才当作损坏/二进制文件拒绝
-  const cleaned = stripControlChars(text)
-  const mostlyGarbage = cleaned.length < text.length * 0.5 || !cleaned.trim() || readableRatio(cleaned) < 0.6
-  if (text.includes('\0') && mostlyGarbage) {
-    throw new Error('文件包含非文本字符，请将原文件另存为 UTF-8 格式的 TXT 后重新导入')
-  }
-  return cleaned
-}
-
 export const parseLocalTxtBook = async (file: File): Promise<LocalParsedBook> => {
   const text = await readLocalTxtContent(file)
   const filenameTitle = file.name.replace(/\.[^.]+$/, '').trim() || '导入作品'
@@ -340,6 +291,8 @@ export const parseLocalTxtBook = async (file: File): Promise<LocalParsedBook> =>
   }
   const pushChapterText = (line: string) => {
     if (!currentChapter) {
+      // 第一个章节标题之前只有空行（文件开头、卷名和首章之间常见）：不为它造一章，否则会多出一个空的"第1章"
+      if (!line.trim()) return
       currentChapter = { title: '第1章', textContent: '' }
       currentVolume.chapters.push(currentChapter)
     }

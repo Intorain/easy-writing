@@ -1,4 +1,5 @@
 import { isTauriRuntime } from '@/storage'
+import { abortable, throwIfAborted } from '@/utils/abortable'
 
 /**
  * 榜单隐藏抓取窗口的前端封装。
@@ -17,19 +18,20 @@ export interface RankRenderCrawlOptions {
   timeoutMs?: number
 }
 
-export const crawlRankPageViaWindow = async (url: string, options: RankRenderCrawlOptions): Promise<string> => {
+export const crawlRankPageViaWindow = async (url: string, options: RankRenderCrawlOptions, signal?: AbortSignal): Promise<string> => {
+  throwIfAborted(signal)
   if (!isTauriRuntime()) {
     throw new Error('榜单抓取是桌面版功能：浏览器受跨域限制无法直接访问平台站点，请在桌面客户端使用')
   }
   const { invoke } = await import('@tauri-apps/api/core')
-  const html = await invoke<string>('rank_crawl_render_page', {
+  const html = await abortable(invoke<string>('rank_crawl_render_page', {
     request: {
       url,
       waitSelector: options.waitSelector,
       scrollRounds: Math.max(0, Math.floor(options.scrollRounds || 0)),
       timeoutMs: options.timeoutMs,
     },
-  })
+  }), signal)
   if (!String(html || '').trim()) throw new Error('抓取窗口没有返回页面内容')
   return html
 }

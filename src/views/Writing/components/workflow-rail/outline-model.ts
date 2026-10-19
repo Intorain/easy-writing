@@ -52,6 +52,23 @@ const readNodeText = (value: unknown) => (typeof value === 'string' ? value : ''
 const isRecord = (value: unknown): value is JsonRecord =>
   Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 
+/**
+ * 一拍的文字：旧细纲是字符串；Agent 的拍子（BeatsPlan）是对象，取“［用途］场景｜冲突”。
+ * 章末钩子同理，对象取 text。
+ */
+export const beatLine = (beat: unknown): string => {
+  if (typeof beat === 'string') return beat.trim()
+  if (!isRecord(beat)) return ''
+  const scene = readNodeText(beat.scene).trim()
+  if (!scene) return ''
+  const purpose = readNodeText(beat.purpose).trim()
+  const conflict = readNodeText(beat.conflict).trim()
+  return `${purpose ? `［${purpose}］` : ''}${scene}${conflict ? `｜冲突：${conflict}` : ''}`
+}
+
+export const hookLine = (hook: unknown): string =>
+  typeof hook === 'string' ? hook.trim() : isRecord(hook) ? readNodeText(hook.text).trim() : ''
+
 /** 读取节点上的细纲；无效（拍数不足等）视为未展开 */
 export const normalizeExpandedOutline = (
   raw: unknown
@@ -61,7 +78,7 @@ export const normalizeExpandedOutline = (
   const beats: string[] = []
   const scenes: string[] = []
   raw.beats.forEach((beat, index) => {
-    const text = readNodeText(beat).trim().slice(0, OUTLINE_BEAT_MAX_LEN)
+    const text = beatLine(beat).slice(0, OUTLINE_BEAT_MAX_LEN)
     if (!text) return
     beats.push(text)
     scenes.push(readNodeText(rawScenes[index]))
@@ -70,7 +87,7 @@ export const normalizeExpandedOutline = (
   return {
     beats: beats.slice(0, OUTLINE_MAX_BEATS),
     beatScenes: scenes.some(Boolean) ? scenes.slice(0, OUTLINE_MAX_BEATS) : null,
-    endHook: readNodeText(raw.endHook).trim().slice(0, OUTLINE_BEAT_MAX_LEN),
+    endHook: hookLine(raw.endHook).slice(0, OUTLINE_BEAT_MAX_LEN),
   }
 }
 

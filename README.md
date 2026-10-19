@@ -148,6 +148,10 @@ API Key 留空即可，不用填。若仍报 403，多半是本地服务按请�
 
 <img src="./docs/images/wechat-contact.png" alt="yilujian 微信二维码" width="260">
 
+**微信群**：易创网文反馈群，使用问题和建议可以在群里直接提。群二维码每周更换，过期请加上面的微信拉你进群。
+
+<img src="./docs/images/wechat-group.png" alt="易创网文反馈群二维码" width="260">
+
 ## 协议
 
 [AGPL-3.0](./LICENSE)：可以自由使用、修改、分发本项目，但修改后的版本（包括架设为网络服务提供给他人使用）必须以同样的协议开源。
