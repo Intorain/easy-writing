@@ -74,6 +74,7 @@ fn env_python(root: &Path, skill_id: &str) -> PathBuf {
 }
 
 fn run_captured(cmd: &mut Command, timeout: Duration) -> Result<(bool, String, String), String> {
+    crate::background_process::hide_console(cmd);
     let mut child = cmd
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -631,6 +632,7 @@ pub fn run_with_cancellation(
 type Outcome = (Option<i32>, Vec<u8>, String, bool, bool);
 
 fn execute(mut cmd: Command, input: &Value, timeout: Duration, cancelled: &std::sync::atomic::AtomicBool) -> Result<Outcome, String> {
+    crate::background_process::hide_console(&mut cmd);
     let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -692,7 +694,7 @@ fn kill_tree(child: &mut std::process::Child) {
     }
     #[cfg(windows)]
     {
-        let _ = Command::new("taskkill")
+        let _ = crate::background_process::hide_console(&mut Command::new("taskkill"))
             .args(["/PID", &child.id().to_string(), "/T", "/F"])
             .output();
     }

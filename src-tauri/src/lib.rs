@@ -54,6 +54,7 @@ mod agent_feedback_tests;
 #[cfg(all(test, feature = "local-tests"))]
 mod agent_creation_tests;
 mod agent_host;
+mod background_process;
 mod agent_indexer;
 #[cfg(all(test, feature = "local-tests"))]
 mod agent_indexer_tests;

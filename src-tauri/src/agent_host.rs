@@ -75,7 +75,7 @@ fn stop_job(job: &Job) {
     }
     #[cfg(windows)]
     {
-        let _ = Command::new("taskkill")
+        let _ = crate::background_process::hide_console(&mut Command::new("taskkill"))
             .args(["/PID", &pid.to_string(), "/T", "/F"])
             .output();
     }
@@ -1907,6 +1907,7 @@ fn index_process(
     job: &Arc<Job>,
 ) -> Result<(BTreeSet<(String, String)>, Vec<Value>, Value, HashMap<String, Value>), String> {
     let mut command = worker_command(app)?;
+    crate::background_process::hide_console(&mut command);
     command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

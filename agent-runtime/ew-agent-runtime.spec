@@ -52,6 +52,8 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
+    # stdio 是宿主通信协议；Windows 隐藏窗口由宿主的 CREATE_NO_WINDOW 控制。
+    # 不能改成 windowed/no-console，否则 Python 标准输入输出会不可用。
     console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,

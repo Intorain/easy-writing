@@ -89,6 +89,7 @@ fn rotate_if_large(path: &Path) {
 }
 
 fn spawn(key: &str, mut command: Command, log_dir: &Path) -> Result<Resident, String> {
+    crate::background_process::hide_console(&mut command);
     command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
